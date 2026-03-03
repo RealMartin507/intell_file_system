@@ -1,0 +1,23 @@
+{
+    "scan_roots": [
+        {
+            "path": "E:\\",
+            "disk_label": "工作数据盘",
+            "disk_serial": ""
+        }
+    ],
+    "exclude_dirs": [
+        "$RECYCLE.BIN",
+        "System Volume Information",
+        ".Trash"
+    ],
+    "exclude_patterns": [
+        "~$*",
+        "*.tmp",
+        "Thumbs.db",
+        "desktop.ini"
+    ],
+    "auto_scan_interval_minutes": 30,
+    "server_port": 8000,
+    "thumbnail_cache_dir": "./data/thumbnails"
+}

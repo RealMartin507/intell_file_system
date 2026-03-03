@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件管理系统</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <h1>文件管理系统</h1>
+        <p class="subtitle">本地文件智能管理 · 快速搜索 · 精准定位</p>
+    </header>
+
+    <main>
+        <section class="search-bar">
+            <input type="text" id="searchInput" placeholder="搜索文件名、路径..." autofocus>
+            <button id="searchBtn">搜索</button>
+        </section>
+
+        <section class="dashboard" id="dashboard">
+            <div class="stat-card" id="statTotal">
+                <span class="stat-num">--</span>
+                <span class="stat-label">文件总数</span>
+            </div>
+            <div class="stat-card" id="statLastScan">
+                <span class="stat-num">--</span>
+                <span class="stat-label">最近扫描</span>
+            </div>
+            <div class="stat-card" id="statDisk">
+                <span class="stat-num">--</span>
+                <span class="stat-label">磁盘状态</span>
+            </div>
+        </section>
+    </main>
+
+    <script src="js/app.js"></script>
+    <script src="js/dashboard.js"></script>
+    <script src="js/search.js"></script>
+    <script src="js/preview.js"></script>
+</body>
+</html>

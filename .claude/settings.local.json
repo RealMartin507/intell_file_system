@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import fastapi, uvicorn, aiofiles; print\\(''dependencies ok''\\)\")",
+      "Bash(pip --version)",
+      "Bash(pip install fastapi uvicorn[standard] aiofiles python-multipart)",
+      "Bash(where python)",
+      "Bash(conda activate file-manager)",
+      "Bash(python -c \"import fastapi; print\\(''ok''\\)\")",
+      "Bash(C:/Users/mmm/.conda/envs/file-manager/python.exe -c \"import fastapi; print\\(''fastapi ok''\\)\")",
+      "Bash(C:/Users/mmm/.conda/envs/file-manager/python.exe -c \":*)",
+      "Bash(curl -s \"http://127.0.0.1:8001/api/scan/status\")",
+      "Bash(curl -s \"http://127.0.0.1:8001/api/scan/logs\")",
+      "Bash(curl -s \"http://127.0.0.1:8001/api/scan/logs?limit=5\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/stats/overview\")",
+      "Bash(C:/Users/mmm/.conda/envs/file-manager/python.exe -m json.tool)",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/stats/types\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/search?q=scanner\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/search?type=other&size=5\")",
+      "Bash(git:*)",
+      "Bash(cmd.exe:*)"
+    ]
+  }
+}

@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FileIndex — 本地文件智能管理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface-2: #f2f2ef;
+    --border: #e8e8e4;
+    --border-hover: #d0d0ca;
+    --text-primary: #1a1a18;
+    --text-secondary: #6b6b66;
+    --text-tertiary: #9e9e98;
+    --accent: #2563eb;
+    --accent-light: #eff4ff;
+    --accent-hover: #1d4ed8;
+    --green: #16a34a;
+    --green-light: #f0fdf4;
+    --amber: #d97706;
+    --amber-light: #fffbeb;
+    --red: #dc2626;
+    --tag-doc: #dbeafe;
+    --tag-doc-text: #1e40af;
+    --tag-img: #fce7f3;
+    --tag-img-text: #9d174d;
+    --tag-gis: #d1fae5;
+    --tag-gis-text: #065f46;
+    --tag-cad: #fef3c7;
+    --tag-cad-text: #92400e;
+    --tag-mapgis: #ede9fe;
+    --tag-mapgis-text: #5b21b6;
+    --radius-sm: 6px;
+    --radius: 10px;
+    --radius-lg: 14px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow: 0 4px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+    --font-sans: 'DM Sans', 'Noto Sans SC', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text-primary);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ── LAYOUT ── */
+  .app { display: flex; height: 100vh; overflow: hidden; }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+
+  .logo {
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon {
+    width: 30px; height: 30px;
+    background: var(--text-primary);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .logo-icon svg { color: white; }
+  .logo-name { font-size: 15px; font-weight: 600; letter-spacing: -0.3px; color: var(--text-primary); }
+  .logo-name span { color: var(--text-tertiary); font-weight: 400; }
+
+  .nav { padding: 12px 10px; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    font-weight: 400;
+    transition: all 0.15s;
+    margin-bottom: 1px;
+    user-select: none;
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--text-primary); }
+  .nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 500; }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .nav-section {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 16px 10px 6px;
+  }
+
+  .sidebar-footer {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .disk-status {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 11px;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+  }
+  .disk-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .disk-dot.offline { background: var(--red); }
+  .disk-name { flex: 1; color: var(--text-secondary); }
+  .disk-capacity { color: var(--text-tertiary); font-size: 11.5px; }
+
+  /* ── MAIN ── */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .search-wrap {
+    flex: 1;
+    max-width: 560px;
+    position: relative;
+  }
+  .search-wrap svg {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: var(--text-tertiary);
+    pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    padding: 8px 14px 8px 38px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    color: var(--text-primary);
+    outline: none;
+    transition: all 0.15s;
+  }
+  .search-input::placeholder { color: var(--text-tertiary); }
+  .search-input:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px rgba(37,99,235,0.08); }
+
+  .topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 13px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .btn-ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+  .btn-ghost:hover { background: var(--surface-2); color: var(--text-primary); }
+  .btn-primary { background: var(--text-primary); color: white; }
+  .btn-primary:hover { background: #333330; }
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); color: white;
+    font-size: 10px; font-weight: 600;
+  }
+
+  /* ── CONTENT ── */
+  .content { flex: 1; overflow-y: auto; padding: 24px; }
+
+  /* ── VIEWS ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── DASHBOARD ── */
+  .page-header { margin-bottom: 22px; }
+  .page-title { font-size: 20px; font-weight: 600; letter-spacing: -0.4px; color: var(--text-primary); }
+  .page-subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 3px; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    transition: all 0.15s;
+  }
+  .stat-card:hover { box-shadow: var(--shadow); border-color: var(--border-hover); }
+  .stat-label { font-size: 12px; color: var(--text-tertiary); font-weight: 500; letter-spacing: 0.02em; margin-bottom: 8px; }
+  .stat-value { font-size: 26px; font-weight: 600; letter-spacing: -1px; color: var(--text-primary); }
+  .stat-value.accent { color: var(--accent); }
+  .stat-meta { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+  .stat-meta .up { color: var(--green); }
+  .stat-meta .down { color: var(--red); }
+
+  .dashboard-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+  }
+  .card-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title-action { font-size: 12px; font-weight: 400; color: var(--accent); cursor: pointer; }
+
+  /* donut chart */
+  .donut-wrap { display: flex; align-items: center; gap: 24px; }
+  .donut-svg { width: 100px; height: 100px; flex-shrink: 0; }
+  .donut-legend { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .legend-name { flex: 1; color: var(--text-secondary); }
+  .legend-count { font-weight: 500; color: var(--text-primary); }
+
+  /* scan log */
+  .scan-log { display: flex; flex-direction: column; gap: 10px; }
+  .scan-entry {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 14px;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+  }
+  .scan-type {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .scan-type.full { background: var(--accent-light); color: var(--accent); }
+  .scan-type.inc { background: var(--green-light); color: var(--green); }
+  .scan-time { color: var(--text-tertiary); flex: 1; }
+  .scan-stats { display: flex; gap: 10px; }
+  .scan-stat { color: var(--text-secondary); }
+  .scan-stat .n { font-weight: 600; color: var(--text-primary); }
+
+  .scan-progress-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+  .progress-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .progress-label { font-size: 13.5px; font-weight: 600; }
+  .progress-pct { font-size: 13px; font-weight: 600; color: var(--accent); }
+  .progress-bar-bg {
+    height: 6px;
+    background: var(--surface-2);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 99px;
+    width: 67%;
+    transition: width 0.5s ease;
+  }
+  .progress-meta { font-size: 12px; color: var(--text-secondary); }
+
+  /* ── SEARCH VIEW ── */
+  .filter-bar {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .filter-label { font-size: 12.5px; color: var(--text-tertiary); margin-right: 2px; }
+  .tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 11px;
+    border-radius: 99px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    background: var(--surface);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .tag:hover { border-color: var(--border-hover); color: var(--text-primary); }
+  .tag.active { background: var(--text-primary); color: white; border-color: var(--text-primary); }
+  .tag.doc-active { background: var(--tag-doc); color: var(--tag-doc-text); border-color: transparent; }
+  .tag.img-active { background: var(--tag-img); color: var(--tag-img-text); border-color: transparent; }
+  .tag.gis-active { background: var(--tag-gis); color: var(--tag-gis-text); border-color: transparent; }
+  .tag.cad-active { background: var(--tag-cad); color: var(--tag-cad-text); border-color: transparent; }
+
+  .results-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .results-count { font-size: 13px; color: var(--text-secondary); }
+  .results-count strong { color: var(--text-primary); font-weight: 600; }
+  .sort-wrap { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
+  .sort-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+  }
+
+  .file-list { display: flex; flex-direction: column; gap: 2px; }
+  .file-row {
+    display: flex; align-items: center;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.12s;
+    gap: 12px;
+  }
+  .file-row:hover { box-shadow: var(--shadow-sm); border-color: var(--border-hover); background: #fdfdfb; }
+  .file-row:hover .file-actions { opacity: 1; }
+
+  .file-icon {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-size: 15px;
+  }
+  .file-icon.doc { background: var(--tag-doc); }
+  .file-icon.img { background: var(--tag-img); }
+  .file-icon.gis { background: var(--tag-gis); }
+  .file-icon.cad { background: var(--tag-cad); }
+  .file-icon.mapgis { background: var(--tag-mapgis); }
+  .file-icon.pdf { background: #fee2e2; }
+  .file-icon.shp { background: #d1fae5; }
+
+  .file-info { flex: 1; min-width: 0; }
+  .file-name {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+  .file-name mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
+  .file-path {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .file-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+  .file-type-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .file-size { font-size: 11.5px; color: var(--text-tertiary); }
+  .file-date { font-size: 11.5px; color: var(--text-tertiary); }
+
+  .file-actions {
+    display: flex; align-items: center; gap: 4px;
+    opacity: 0;
+    transition: opacity 0.12s;
+    flex-shrink: 0;
+  }
+  .action-btn {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s;
+    color: var(--text-secondary);
+  }
+  .action-btn:hover { background: var(--surface-2); color: var(--text-primary); border-color: var(--border-hover); }
+  .action-btn svg { width: 13px; height: 13px; }
+
+  .pagination {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    margin-top: 22px;
+  }
+  .page-btn {
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: all 0.12s;
+  }
+  .page-btn:hover { background: var(--surface-2); color: var(--text-primary); }
+  .page-btn.active { background: var(--text-primary); color: white; border-color: var(--text-primary); }
+  .page-btn svg { width: 14px; height: 14px; }
+
+  /* shapefile group */
+  .shp-group {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 2px;
+  }
+  .shp-group .file-row { border: none; border-radius: 0; border-bottom: 1px solid var(--border); }
+  .shp-group .file-row:last-child { border-bottom: none; }
+  .shp-group-header {
+    padding: 7px 14px;
+    background: var(--surface-2);
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .shp-chip {
+    background: var(--tag-gis); color: var(--tag-gis-text);
+    padding: 1px 6px; border-radius: 3px; font-size: 10.5px; font-weight: 600;
+  }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.35);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    width: 560px;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow-lg);
+    transform: scale(0.96) translateY(8px);
+    transition: transform 0.2s;
+  }
+  .modal-overlay.open .modal { transform: scale(1) translateY(0); }
+  .modal-header {
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-start; gap: 14px;
+  }
+  .modal-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .modal-title-wrap { flex: 1; min-width: 0; }
+  .modal-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .modal-subtitle { font-size: 12px; color: var(--text-tertiary); }
+  .modal-close {
+    width: 28px; height: 28px; border-radius: var(--radius-sm);
+    background: transparent; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary); transition: all 0.12s;
+  }
+  .modal-close:hover { background: var(--surface-2); color: var(--text-primary); }
+  .modal-close svg { width: 16px; height: 16px; }
+
+  .modal-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
+  .preview-image {
+    width: 100%; border-radius: var(--radius);
+    background: var(--surface-2);
+    aspect-ratio: 16/9;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 18px;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    overflow: hidden;
+  }
+  .preview-image img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius); }
+
+  .meta-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-bottom: 16px;
+  }
+  .meta-item {}
+  .meta-key { font-size: 11.5px; color: var(--text-tertiary); margin-bottom: 3px; font-weight: 500; }
+  .meta-val { font-size: 13px; color: var(--text-primary); word-break: break-all; }
+
+  .path-copy {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: 'Courier New', monospace;
+    word-break: break-all;
+    cursor: pointer;
+    transition: all 0.12s;
+    position: relative;
+  }
+  .path-copy:hover { border-color: var(--border-hover); }
+  .path-copy:hover::after {
+    content: '点击复制';
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-size: 11px; color: var(--accent);
+    font-family: var(--font-sans);
+  }
+
+  .modal-footer {
+    padding: 14px 22px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 8px;
+  }
+  .modal-footer .btn { flex: 1; justify-content: center; }
+
+  /* ── EMPTY STATE ── */
+  .empty {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 60px 20px; text-align: center;
+    color: var(--text-tertiary);
+  }
+  .empty svg { width: 40px; height: 40px; margin-bottom: 12px; opacity: 0.4; }
+  .empty-title { font-size: 15px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+  .empty-desc { font-size: 13px; }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text-primary); color: white;
+    padding: 10px 18px; border-radius: var(--radius); font-size: 13px;
+    box-shadow: var(--shadow-lg); opacity: 0; transition: all 0.25s; pointer-events: none; z-index: 200;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+      </div>
+      <div class="logo-name">FileIndex<span>.app</span></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-item active" onclick="switchView('dashboard', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        仪表盘
+      </div>
+      <div class="nav-item" onclick="switchView('search', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        搜索文件
+      </div>
+
+      <div class="nav-section">文件类型</div>
+      <div class="nav-item" onclick="switchView('search', this); filterByType('document')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        办公文档
+      </div>
+      <div class="nav-item" onclick="switchView('search', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        图片文件
+      </div>
+      <div class="nav-item" onclick="switchView('search', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+        GIS 矢量
+      </div>
+      <div class="nav-item" onclick="switchView('search', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        GIS 栅格
+      </div>
+      <div class="nav-item" onclick="switchView('search', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        CAD 文件
+      </div>
+
+      <div class="nav-section">设置</div>
+      <div class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M2 12h2M20 12h2"/></svg>
+        扫描设置
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="disk-status">
+        <div class="disk-dot"></div>
+        <span class="disk-name">E: 工作数据盘</span>
+        <span class="disk-capacity">73%</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-input" type="text" placeholder="搜索文件名、路径… （支持中文）" id="searchInput" oninput="handleSearch(this.value)" onkeydown="if(event.key==='Enter'){switchView('search')}">
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost" onclick="simulateScan()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+          增量扫描
+        </button>
+        <button class="btn btn-primary" onclick="switchView('scan')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          全量扫描
+        </button>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+      <!-- ── DASHBOARD VIEW ── -->
+      <div class="view active" id="view-dashboard">
+        <div class="page-header">
+          <div class="page-title">概览</div>
+          <div class="page-subtitle">最后更新：今天 09:32 · 上次扫描耗时 3m 41s</div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">文件总数</div>
+            <div class="stat-value">352,847</div>
+            <div class="stat-meta"><span class="up">↑ 1,203</span> 较上次扫描</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">总占用空间</div>
+            <div class="stat-value">1.47<span style="font-size:16px;font-weight:400;color:var(--text-secondary)"> TB</span></div>
+            <div class="stat-meta">2 TB 硬盘 · 已用 73%</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">索引完成率</div>
+            <div class="stat-value accent">100<span style="font-size:16px">%</span></div>
+            <div class="stat-meta">元数据索引已完成</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">数据库大小</div>
+            <div class="stat-value">68.3<span style="font-size:16px;font-weight:400;color:var(--text-secondary)"> MB</span></div>
+            <div class="stat-meta">SQLite · FTS5 索引</div>
+          </div>
+        </div>
+
+        <div class="dashboard-row">
+          <div class="card">
+            <div class="card-title">文件类型分布 <span class="card-title-action">查看全部</span></div>
+            <div class="donut-wrap">
+              <svg class="donut-svg" viewBox="0 0 36 36">
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#e8e8e4" stroke-width="4"/>
+                <!-- segments: img 31%, doc 22%, gis 19%, cad 14%, other 14% -->
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#fce7f3" stroke-width="4"
+                  stroke-dasharray="27.3 60.7" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#dbeafe" stroke-width="4"
+                  stroke-dasharray="19.4 68.6" stroke-dashoffset="-27.3" transform="rotate(-90 18 18)"/>
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#d1fae5" stroke-width="4"
+                  stroke-dasharray="16.8 71.2" stroke-dashoffset="-46.7" transform="rotate(-90 18 18)"/>
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#fef3c7" stroke-width="4"
+                  stroke-dasharray="12.4 75.6" stroke-dashoffset="-63.5" transform="rotate(-90 18 18)"/>
+                <circle cx="18" cy="18" r="14" fill="none" stroke="#ede9fe" stroke-width="4"
+                  stroke-dasharray="12.4 75.6" stroke-dashoffset="-75.9" transform="rotate(-90 18 18)"/>
+                <text x="18" y="17" text-anchor="middle" font-size="5.5" font-weight="600" fill="#1a1a18">352K</text>
+                <text x="18" y="22" text-anchor="middle" font-size="3.5" fill="#9e9e98">文件</text>
+              </svg>
+              <div class="donut-legend">
+                <div class="legend-item"><div class="legend-dot" style="background:#f9a8d4"></div><span class="legend-name">图片</span><span class="legend-count">109,384</span></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#93c5fd"></div><span class="legend-name">文档</span><span class="legend-count">77,626</span></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#6ee7b7"></div><span class="legend-name">GIS 矢量</span><span class="legend-count">67,041</span></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#fcd34d"></div><span class="legend-name">CAD</span><span class="legend-count">49,399</span></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#c4b5fd"></div><span class="legend-name">MapGIS</span><span class="legend-count">49,397</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">扫描历史</div>
+            <div class="scan-log">
+              <div class="scan-entry">
+                <span class="scan-type full">全量</span>
+                <span class="scan-time">今天 09:28</span>
+                <div class="scan-stats">
+                  <span class="scan-stat"><span class="n">+1203</span> 新增</span>
+                  <span class="scan-stat"><span class="n">-32</span> 删除</span>
+                </div>
+              </div>
+              <div class="scan-entry">
+                <span class="scan-type inc">增量</span>
+                <span class="scan-time">昨天 18:02</span>
+                <div class="scan-stats">
+                  <span class="scan-stat"><span class="n">+89</span> 新增</span>
+                  <span class="scan-stat"><span class="n">-5</span> 删除</span>
+                </div>
+              </div>
+              <div class="scan-entry">
+                <span class="scan-type inc">增量</span>
+                <span class="scan-time">3月1日 12:30</span>
+                <div class="scan-stats">
+                  <span class="scan-stat"><span class="n">+214</span> 新增</span>
+                  <span class="scan-stat"><span class="n">-11</span> 删除</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">最近添加的文件 <span class="card-title-action">查看全部</span></div>
+          <div class="file-list" id="recentFiles"></div>
+        </div>
+      </div>
+
+      <!-- ── SEARCH VIEW ── -->
+      <div class="view" id="view-search">
+        <div class="page-header">
+          <div class="page-title" id="searchTitle">搜索文件</div>
+        </div>
+
+        <div class="filter-bar">
+          <span class="filter-label">类型：</span>
+          <div class="tag active" onclick="setFilter('all', this)">全部</div>
+          <div class="tag" onclick="setFilter('document', this)">📄 文档</div>
+          <div class="tag" onclick="setFilter('spreadsheet', this)">📊 表格</div>
+          <div class="tag" onclick="setFilter('image', this)">🖼️ 图片</div>
+          <div class="tag" onclick="setFilter('gis_vector', this)">🗺️ GIS 矢量</div>
+          <div class="tag" onclick="setFilter('gis_raster', this)">🛰️ GIS 栅格</div>
+          <div class="tag" onclick="setFilter('mapgis', this)">📐 MapGIS</div>
+          <div class="tag" onclick="setFilter('cad', this)">📏 CAD</div>
+          <div class="tag" onclick="setFilter('fme', this)">⚙️ FME</div>
+          <div class="tag" onclick="setFilter('survey', this)">📡 测量</div>
+        </div>
+
+        <div class="results-header">
+          <div class="results-count">找到 <strong id="resultsCount">18</strong> 个结果</div>
+          <div class="sort-wrap">
+            排序：
+            <select class="sort-select">
+              <option>相关度</option>
+              <option>修改时间</option>
+              <option>文件名</option>
+              <option>文件大小</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="file-list" id="fileList"></div>
+
+        <div class="pagination">
+          <div class="page-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </div>
+          <div class="page-btn active">1</div>
+          <div class="page-btn">2</div>
+          <div class="page-btn">3</div>
+          <div class="page-btn">…</div>
+          <div class="page-btn">9</div>
+          <div class="page-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- PREVIEW MODAL -->
+<div class="modal-overlay" id="previewModal" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-icon" id="modalIcon">📄</div>
+      <div class="modal-title-wrap">
+        <div class="modal-title" id="modalTitle">文件名.pdf</div>
+        <div class="modal-subtitle" id="modalSubtitle">document · 2.3 MB</div>
+      </div>
+      <button class="modal-close" onclick="document.getElementById('previewModal').classList.remove('open')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="preview-image" id="modalPreview">
+        <span>📄 预览暂不支持此格式，请直接打开文件</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><div class="meta-key">文件大小</div><div class="meta-val" id="m-size">—</div></div>
+        <div class="meta-item"><div class="meta-key">文件类型</div><div class="meta-val" id="m-type">—</div></div>
+        <div class="meta-item"><div class="meta-key">修改时间</div><div class="meta-val" id="m-date">—</div></div>
+        <div class="meta-item"><div class="meta-key">目录层级</div><div class="meta-val" id="m-depth">—</div></div>
+      </div>
+      <div class="meta-key" style="margin-bottom:6px">完整路径</div>
+      <div class="path-copy" id="m-path" onclick="copyPath(this)">E:\工作文件\项目\2025\地块审批.pdf</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="showToast('正在用系统程序打开…')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        打开文件
+      </button>
+      <button class="btn btn-ghost" onclick="showToast('已在资源管理器中定位文件')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        打开目录
+      </button>
+      <button class="btn btn-ghost" onclick="copyPath(document.getElementById('m-path'))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        复制路径
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── DATA ──
+const FILES = [
+  { id:1, name:'地块审批表_2025.xlsx', ext:'.xlsx', type:'spreadsheet', icon:'📊', iconClass:'doc', size:'1.2 MB', date:'2025-11-20', depth:5, path:'E:\\项目\\2025\\审批\\地块审批表_2025.xlsx', dir:'项目 / 2025 / 审批', badge:'表格', badgeColor:'#dbeafe', badgeText:'#1e40af' },
+  { id:2, name:'建设用地审批意见.pdf', ext:'.pdf', type:'document', icon:'📄', iconClass:'pdf', size:'3.8 MB', date:'2025-11-18', depth:4, path:'E:\\项目\\2025\\审批\\建设用地审批意见.pdf', dir:'项目 / 2025 / 审批', badge:'文档', badgeColor:'#fee2e2', badgeText:'#991b1b' },
+  { id:3, name:'图斑0892_勘界照片.jpg', ext:'.jpg', type:'image', icon:'🖼️', iconClass:'img', size:'4.1 MB', date:'2025-10-05', depth:8, path:'E:\\外业\\图斑\\0892\\图斑0892_勘界照片.jpg', dir:'外业 / 图斑 / 0892', badge:'图片', badgeColor:'#fce7f3', badgeText:'#9d174d' },
+  { id:4, name:'土地利用现状_CGCS2000.shp', ext:'.shp', type:'gis_vector', icon:'🗺️', iconClass:'gis', size:'128.5 MB', date:'2025-09-12', depth:6, path:'E:\\GIS数据\\矢量\\土地利用现状_CGCS2000.shp', dir:'GIS数据 / 矢量', badge:'Shapefile', badgeColor:'#d1fae5', badgeText:'#065f46', isShp:true },
+  { id:5, name:'规划红线.dwg', ext:'.dwg', type:'cad', icon:'📐', iconClass:'cad', size:'22.4 MB', date:'2025-08-30', depth:5, path:'E:\\CAD\\规划\\规划红线.dwg', dir:'CAD / 规划', badge:'CAD', badgeColor:'#fef3c7', badgeText:'#92400e' },
+  { id:6, name:'卫星影像_DOM_2024.tif', ext:'.tif', type:'gis_raster', icon:'🛰️', iconClass:'gis', size:'2.1 GB', date:'2025-07-11', depth:4, path:'E:\\GIS数据\\栅格\\卫星影像_DOM_2024.tif', dir:'GIS数据 / 栅格', badge:'GIS 栅格', badgeColor:'#d1fae5', badgeText:'#065f46' },
+  { id:7, name:'项目可行性研究报告.docx', ext:'.docx', type:'document', icon:'📝', iconClass:'doc', size:'0.8 MB', date:'2025-06-18', depth:4, path:'E:\\项目\\2025\\可研\\项目可行性研究报告.docx', dir:'项目 / 2025 / 可研', badge:'文档', badgeColor:'#dbeafe', badgeText:'#1e40af' },
+  { id:8, name:'地形图_1:2000.mpj', ext:'.mpj', type:'mapgis', icon:'🗾', iconClass:'mapgis', size:'45.2 MB', date:'2025-05-22', depth:5, path:'E:\\MapGIS\\地形图\\地形图_1:2000.mpj', dir:'MapGIS / 地形图', badge:'MapGIS', badgeColor:'#ede9fe', badgeText:'#5b21b6' },
+  { id:9, name:'土地勘测报告_终版.pdf', ext:'.pdf', type:'document', icon:'📄', iconClass:'pdf', size:'5.6 MB', date:'2025-04-10', depth:5, path:'E:\\项目\\2025\\报告\\土地勘测报告_终版.pdf', dir:'项目 / 2025 / 报告', badge:'文档', badgeColor:'#fee2e2', badgeText:'#991b1b' },
+  { id:10, name:'数据处理工作空间.fmw', ext:'.fmw', type:'fme', icon:'⚙️', iconClass:'doc', size:'0.3 MB', date:'2025-03-05', depth:4, path:'E:\\FME\\数据处理工作空间.fmw', dir:'FME', badge:'FME', badgeColor:'#e0f2fe', badgeText:'#075985' },
+];
+
+const RECENT = FILES.slice(0, 4);
+
+// ── RENDER RECENT ──
+function renderRecent() {
+  const el = document.getElementById('recentFiles');
+  el.innerHTML = RECENT.map(f => renderFileRow(f)).join('');
+}
+
+// ── RENDER FILE ROW ──
+function renderFileRow(f, query='') {
+  let name = f.name;
+  if (query) {
+    const idx = name.toLowerCase().indexOf(query.toLowerCase());
+    if (idx >= 0) {
+      name = name.slice(0,idx) + '<mark>' + name.slice(idx,idx+query.length) + '</mark>' + name.slice(idx+query.length);
+    }
+  }
+  return `
+  <div class="file-row" onclick="openPreview(${f.id})">
+    <div class="file-icon ${f.iconClass}">${f.icon}</div>
+    <div class="file-info">
+      <div class="file-name">${name}</div>
+      <div class="file-path">${f.dir}</div>
+    </div>
+    <div class="file-meta">
+      <span class="file-type-badge" style="background:${f.badgeColor};color:${f.badgeText}">${f.badge}</span>
+      <span class="file-size">${f.size}</span>
+      <span class="file-date">${f.date}</span>
+    </div>
+    <div class="file-actions">
+      <div class="action-btn" onclick="event.stopPropagation();showToast('正在打开文件…')" title="打开文件">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </div>
+      <div class="action-btn" onclick="event.stopPropagation();showToast('已在资源管理器中定位')" title="打开目录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      </div>
+      <div class="action-btn" onclick="event.stopPropagation();showToast('路径已复制到剪贴板')" title="复制路径">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── FILTER ──
+let activeFilter = 'all';
+let activeQuery = '';
+
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  let filtered = FILES;
+  if (activeFilter !== 'all') filtered = filtered.filter(f => f.type === activeFilter);
+  if (activeQuery) filtered = filtered.filter(f => f.name.toLowerCase().includes(activeQuery.toLowerCase()) || f.path.toLowerCase().includes(activeQuery.toLowerCase()));
+  document.getElementById('resultsCount').textContent = filtered.length;
+  if (filtered.length === 0) {
+    el.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><div class="empty-title">未找到匹配文件</div><div class="empty-desc">换个关键词或取消筛选再试试</div></div>`;
+    return;
+  }
+  el.innerHTML = filtered.map(f => renderFileRow(f, activeQuery)).join('');
+}
+
+function setFilter(type, el) {
+  activeFilter = type;
+  document.querySelectorAll('.filter-bar .tag').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  renderFileList();
+}
+
+function filterByType(type) {
+  activeFilter = type;
+  document.querySelectorAll('.filter-bar .tag').forEach(t => t.classList.remove('active'));
+}
+
+function handleSearch(val) {
+  activeQuery = val;
+  if (val.length > 0) {
+    switchView('search');
+    document.getElementById('searchTitle').textContent = `搜索：${val}`;
+  }
+  renderFileList();
+}
+
+// ── PREVIEW MODAL ──
+function openPreview(id) {
+  const f = FILES.find(x => x.id === id);
+  if (!f) return;
+  document.getElementById('modalIcon').textContent = f.icon;
+  document.getElementById('modalIcon').className = 'modal-icon ' + f.iconClass;
+  document.getElementById('modalTitle').textContent = f.name;
+  document.getElementById('modalSubtitle').textContent = f.badge + ' · ' + f.size;
+  document.getElementById('m-size').textContent = f.size;
+  document.getElementById('m-type').textContent = f.badge;
+  document.getElementById('m-date').textContent = f.date;
+  document.getElementById('m-depth').textContent = `第 ${f.depth} 层目录`;
+  document.getElementById('m-path').textContent = f.path;
+
+  const prev = document.getElementById('modalPreview');
+  if (f.type === 'image') {
+    prev.innerHTML = '<div style="width:100%;height:100%;background:linear-gradient(135deg,#fce7f3,#dbeafe);display:flex;align-items:center;justify-content:center;font-size:48px;border-radius:8px">🖼️</div>';
+  } else if (f.type === 'document' && f.ext === '.pdf') {
+    prev.innerHTML = '<div style="width:100%;height:100%;background:linear-gradient(135deg,#fee2e2,#fef3c7);display:flex;align-items:center;justify-content:center;font-size:48px;border-radius:8px">📄</div>';
+  } else {
+    prev.innerHTML = '<span style="color:var(--text-tertiary);font-size:13px">暂不支持此格式的预览</span>';
+  }
+
+  document.getElementById('previewModal').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e.target.id === 'previewModal') document.getElementById('previewModal').classList.remove('open');
+}
+
+// ── NAV ──
+function switchView(name, navEl) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + name)?.classList.add('active');
+  if (navEl) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    navEl.classList.add('active');
+  }
+  if (name === 'search') renderFileList();
+}
+
+// ── SCAN SIMULATION ──
+function simulateScan() {
+  showToast('增量扫描已启动，后台运行中…');
+}
+
+// ── COPY ──
+function copyPath(el) {
+  const text = el.textContent.trim();
+  navigator.clipboard?.writeText(text).catch(()=>{});
+  showToast('路径已复制到剪贴板');
+}
+
+// ── TOAST ──
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// ── KEYBOARD ──
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    document.getElementById('searchInput').focus();
+    switchView('search');
+  }
+  if (e.key === 'Escape') {
+    document.getElementById('previewModal').classList.remove('open');
+    document.getElementById('searchInput').blur();
+  }
+});
+
+// ── INIT ──
+renderRecent();
+renderFileList();
+</script>
+</body>
+</html>
