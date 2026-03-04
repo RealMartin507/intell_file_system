@@ -1,97 +1,64 @@
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+/* =========================================================
+   自定义样式 — 仅用于 Tailwind 无法覆盖的部分
+   ========================================================= */
+
+/* ---- 减少动效：尊重用户系统偏好 ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
-body {
-    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-    background: #f5f6fa;
-    color: #333;
+/* ---- Toast 动效 ---- */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(110%); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0);    }
+  to   { opacity: 0; transform: translateX(110%); }
+}
+.toast-enter { animation: toastIn  250ms ease-out both; }
+.toast-leave { animation: toastOut 200ms ease-in  both; }
+
+/* ---- 模态框动效 ---- */
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
+@keyframes modalOut {
+  from { opacity: 1; transform: scale(1);    }
+  to   { opacity: 0; transform: scale(0.97); }
+}
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.modal-enter   { animation: modalIn   200ms cubic-bezier(0, 0, 0.2, 1) both; }
+.modal-leave   { animation: modalOut  150ms ease-in both; }
+.overlay-enter { animation: overlayIn 200ms ease-out both; }
+
+/* ---- 搜索结果淡入 ---- */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+.search-results-enter { animation: fadeInUp 200ms ease-out both; }
+
+/* ---- 扫描进度条：不定态动效 ---- */
+@keyframes scanSlide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.scan-indeterminate {
+  width: 40%;
+  animation: scanSlide 1.4s ease-in-out infinite;
 }
 
-header {
-    background: #1a6fd4;
-    color: #fff;
-    padding: 24px 40px;
-}
-
-header h1 {
-    font-size: 1.8rem;
-    font-weight: 600;
-}
-
-header .subtitle {
-    font-size: 0.9rem;
-    opacity: 0.85;
-    margin-top: 4px;
-}
-
-main {
-    max-width: 960px;
-    margin: 40px auto;
-    padding: 0 20px;
-}
-
-.search-bar {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 32px;
-}
-
-.search-bar input {
-    flex: 1;
-    padding: 12px 16px;
-    font-size: 1rem;
-    border: 1px solid #d0d7e3;
-    border-radius: 6px;
-    outline: none;
-    transition: border-color 0.2s;
-}
-
-.search-bar input:focus {
-    border-color: #1a6fd4;
-}
-
-.search-bar button {
-    padding: 12px 28px;
-    background: #1a6fd4;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.search-bar button:hover {
-    background: #155bb5;
-}
-
-.dashboard {
-    display: flex;
-    gap: 20px;
-}
-
-.stat-card {
-    flex: 1;
-    background: #fff;
-    border-radius: 8px;
-    padding: 24px;
-    text-align: center;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.stat-num {
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: #1a6fd4;
-}
-
-.stat-label {
-    font-size: 0.85rem;
-    color: #888;
-}
+/* ---- 自定义滚动条（轻量化，与米白主题一致）---- */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #DDD8D0; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #c8c2ba; }
