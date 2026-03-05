@@ -57,6 +57,11 @@
   animation: scanSlide 1.4s ease-in-out infinite;
 }
 
+/* ---- 模态框隐藏状态 ---- */
+.hidden {
+  display: none !important;
+}
+
 /* ---- 自定义滚动条（轻量化，与米白主题一致）---- */
 ::-webkit-scrollbar        { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track  { background: transparent; }
