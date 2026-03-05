@@ -376,7 +376,7 @@
       <div id="view-search" class="view-panel" style="display:none">
 
         <!-- ── 顶部搜索栏（粘性）── -->
-        <div class="sticky top-12 z-20 bg-warm-50/90 backdrop-blur-sm border-b border-warm-400 px-6 py-4 flex-shrink-0">
+        <div class="sticky top-[52px] z-20 bg-warm-50/90 backdrop-blur-sm border-b border-warm-400 px-6 py-4 flex-shrink-0">
 
           <!-- 搜索输入框 -->
           <div class="relative mb-3 max-w-3xl">
@@ -503,17 +503,122 @@
       </div>
 
       <!-- AI 问答视图 -->
-      <div id="view-ai" class="view-panel px-6 py-5" style="display:none">
-        <div class="flex flex-col items-center justify-center py-24">
-          <div class="w-16 h-16 rounded-2xl bg-amber-50 flex items-center justify-center mb-4">
-            <i data-lucide="message-circle" class="w-8 h-8 text-amber-500"></i>
-          </div>
-          <h2 class="text-xl font-semibold text-stone-700 mb-2">AI 问答</h2>
-          <p class="text-stone-400 text-sm mb-3">该功能即将推出，敬请期待</p>
-          <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-amber-50 text-amber-700 border border-amber-200">
-            即将推出
-          </span>
+      <div id="view-ai" class="view-panel flex flex-col bg-warm-50" style="display:none; height: calc(100vh - 52px);">
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             顶部标题栏
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="px-6 py-4 border-b border-warm-400 flex-shrink-0 bg-white/60">
+          <h2 class="text-lg font-semibold text-stone-800">AI 文件助手</h2>
+          <p class="text-sm text-stone-400 mt-0.5">基于本地知识库的智能问答（即将推出）</p>
         </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             主内容区：消息列表或初始状态
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+
+          <!-- 初始状态（无对话时显示） -->
+          <div id="ai-welcome-state" class="flex flex-col items-center justify-center h-full py-12">
+            <!-- 欢迎图标 -->
+            <div class="w-20 h-20 rounded-2xl bg-blue-50 flex items-center justify-center mb-6">
+              <i data-lucide="message-circle" class="w-10 h-10 text-blue-600"></i>
+            </div>
+            <!-- 欢迎标题 -->
+            <h3 class="text-2xl font-bold text-stone-800 mb-2">AI 文件助手</h3>
+            <p class="text-base text-stone-400 text-center mb-8 max-w-md">基于本地知识库的智能问答，帮助您快速找到所需文件</p>
+
+            <!-- 示例问题卡片 -->
+            <div class="w-full max-w-2xl grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="XX项目的审批文件在哪？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="folder-open" class="w-4 h-4 inline mr-2"></i>
+                  XX项目的审批文件在哪？
+                </p>
+                <p class="text-xs text-stone-400 mt-2">快速定位特定项目的审批文档</p>
+              </button>
+
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="去年关于土地政策的文件有哪些？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="calendar" class="w-4 h-4 inline mr-2"></i>
+                  去年关于土地政策的文件
+                </p>
+                <p class="text-xs text-stone-400 mt-2">按年份和主题查找相关文件</p>
+              </button>
+
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="图斑号 XXX 的外业照片在哪？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="image" class="w-4 h-4 inline mr-2"></i>
+                  图斑号 XXX 的外业照片
+                </p>
+                <p class="text-xs text-stone-400 mt-2">查找特定图斑的现场影像资料</p>
+              </button>
+
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="坐标系是 CGCS2000 的栅格数据有哪些？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="grid-3x3" class="w-4 h-4 inline mr-2"></i>
+                  CGCS2000 的栅格数据
+                </p>
+                <p class="text-xs text-stone-400 mt-2">筛选特定坐标系统的数据</p>
+              </button>
+
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="包含地块编号 YYY 的 Shapefile 有哪些？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="map" class="w-4 h-4 inline mr-2"></i>
+                  特定地块的 Shapefile
+                </p>
+                <p class="text-xs text-stone-400 mt-2">定位特定地块的矢量数据</p>
+              </button>
+
+              <button class="ai-example-btn p-4 rounded-xl text-left border border-stone-200 bg-white hover:bg-stone-50 hover:border-blue-300 transition-all duration-150 cursor-pointer group"
+                      data-prompt="哪些 CAD 文件里有某某图层？">
+                <p class="font-medium text-stone-800 group-hover:text-blue-600 transition-colors">
+                  <i data-lucide="pen-tool" class="w-4 h-4 inline mr-2"></i>
+                  CAD 特定图层的文件
+                </p>
+                <p class="text-xs text-stone-400 mt-2">搜索包含特定图层的 CAD 设计</p>
+              </button>
+            </div>
+          </div>
+
+          <!-- 对话消息列表（对话时显示） -->
+          <div id="ai-messages-container" class="space-y-4 hidden">
+            <!-- 动态生成消息 -->
+          </div>
+
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             底部输入区
+             ═══════════════════════════════════════════════════════════════ -->
+        <div class="px-6 py-4 border-t border-warm-400 flex-shrink-0 bg-white/60">
+          <div class="flex gap-3 items-end max-w-3xl mx-auto">
+            <!-- 多行文本输入框 -->
+            <textarea
+              id="ai-input-text"
+              placeholder="输入问题或描述需求...（Ctrl+Enter 发送）"
+              class="flex-1 px-4 py-3 rounded-xl border border-stone-200 bg-white text-base text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow duration-200 resize-none"
+              style="box-shadow:0 1px 2px rgba(45,41,38,0.06); max-height: 120px; min-height: 44px;"
+              rows="1"
+            ></textarea>
+
+            <!-- 发送按钮 -->
+            <button
+              id="ai-send-btn"
+              aria-label="发送消息"
+              class="inline-flex items-center justify-center p-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              <i data-lucide="send" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <p class="text-xs text-stone-400 mt-2 text-center">该功能将在后续版本推出，现在可体验问题建议</p>
+        </div>
+
       </div>
 
       <!-- 设置视图 -->
@@ -620,46 +725,7 @@
   <script src="js/dashboard.js"></script>
   <script src="js/search.js"></script>
   <script src="js/preview.js"></script>
-
-  <!-- 测试脚本：验证预览功能 -->
-  <script>
-    // 延迟执行，确保 preview.js 加载完毕
-    setTimeout(() => {
-      console.log('='.repeat(50));
-      console.log('📋 Preview 诊断报告');
-      console.log('='.repeat(50));
-
-      // 检查 Preview 对象
-      console.log('1. Preview 对象:', typeof window.Preview === 'object' ? '✅ 存在' : '❌ 不存在');
-      if (window.Preview) {
-        console.log('   - show:', typeof window.Preview.show);
-        console.log('   - hide:', typeof window.Preview.hide);
-        console.log('   - openFullImage:', typeof window.Preview.openFullImage);
-      }
-
-      // 检查模态框元素
-      const container = document.getElementById('preview-modal-container');
-      const modal = document.getElementById('preview-modal');
-      console.log('2. 模态框容器:', container ? '✅ 存在' : '❌ 不存在');
-      console.log('3. 模态框主体:', modal ? '✅ 存在' : '❌ 不存在');
-
-      if (container) {
-        const style = window.getComputedStyle(container);
-        console.log('4. 容器样式:');
-        console.log('   - display:', style.display);
-        console.log('   - position:', style.position);
-        console.log('   - z-index:', style.zIndex);
-        console.log('   - visibility:', style.visibility);
-      }
-
-      // 检查 App 对象
-      console.log('5. App 对象:', typeof window.App === 'object' ? '✅ 存在' : '❌ 不存在');
-
-      console.log('='.repeat(50));
-      console.log('💡 测试方法：在下方控制台输入');
-      console.log('   Preview.show("test-id")');
-      console.log('='.repeat(50));
-    }, 100);
-  </script>
+  <script src="js/settings.js"></script>
+  <script src="js/ai.js"></script>
 </body>
 </html>

@@ -372,8 +372,8 @@ function _buildFileInfoCard(file, cfg) {
     <div class="space-y-2.5">
       ${rows.map(row => `
         <div class="flex items-start gap-3">
-          <p class="text-xs font-medium text-stone-400 min-w-fit">${row.label}</p>
-          <p class="text-sm text-stone-700 flex-1 break-words ${row.mono ? 'font-mono text-xs' : ''}">${row.value || '--'}</p>
+          <p class="text-xs font-medium text-stone-400 w-16 flex-shrink-0">${row.label}</p>
+          <p class="text-sm text-stone-700 flex-1 break-all ${row.mono ? 'font-mono text-xs leading-relaxed' : ''}">${row.value || '--'}</p>
         </div>
       `).join('')}
     </div>

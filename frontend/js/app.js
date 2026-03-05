@@ -43,10 +43,17 @@ document.addEventListener('DOMContentLoaded', () => {
     item.addEventListener('click', () => switchView(item.dataset.view));
   });
 
-  // 绑定顶部扫描按钮（后续由 dashboard.js 接管，这里仅做占位）
+  // 绑定顶部扫描按钮：非仪表盘时切换过去；仪表盘内的扫描滚动由 dashboard.js 接管
   document.getElementById('btn-scan')?.addEventListener('click', () => {
-    App.showToast('请前往仪表盘触发扫描', 'info');
-    switchView('dashboard');
+    if (_currentView !== 'dashboard') switchView('dashboard');
+  });
+
+  // 监听视图切换，初始化相应模块
+  document.addEventListener('app:viewChanged', (e) => {
+    const viewName = e.detail.view;
+    if (viewName === 'settings' && window.Settings) {
+      setTimeout(() => Settings.init(), 0);
+    }
   });
 
   // 初始视图
@@ -73,7 +80,12 @@ function switchView(viewName) {
   Object.keys(VIEWS).forEach(name => {
     const el = document.getElementById(VIEWS[name].viewId);
     if (!el) return;
-    el.style.display = name === viewName ? 'block' : 'none';
+    if (name === viewName) {
+      // 如果视图有 flex 类，使用 flex 显示；否则使用 block
+      el.style.display = el.classList.contains('flex') ? 'flex' : 'block';
+    } else {
+      el.style.display = 'none';
+    }
   });
 
   // 更新导航选中状态

@@ -57,22 +57,24 @@ let _searchTimer = null;
 // 初始化
 // ──────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('🚀 搜索模块初始化...');
-
   _initSearchInput();
   _initTypeFilters();
   _initSortControl();
   _initPagination();
   _initGlobalKeyboardShortcuts();
 
-  console.log('✅ 搜索模块初始化完成');
-
   // 监听来自 dashboard 的搜索请求
   document.addEventListener('app:searchRequested', e => {
     const { q, type } = e.detail;
-    console.log('📨 收到搜索请求:', { q, type });
-    if (q) _searchState.query = q;
-    if (type) _searchState.type = type;
+    if (q !== undefined) {
+      _searchState.query = q;
+      const input = document.getElementById('search-input');
+      if (input) { input.value = q; _updateClearButton(); }
+    }
+    if (type !== undefined) {
+      _searchState.type = type;
+      _updateFilterUI();
+    }
     _searchState.page = 1;
     _doSearch();
   });
@@ -80,14 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 切换到搜索视图时，自动聚焦搜索框
   document.addEventListener('app:viewChanged', e => {
     if (e.detail.view === 'search') {
-      console.log('📄 切换到搜索视图');
-      setTimeout(() => {
-        const input = document.getElementById('search-input');
-        if (input) {
-          input.focus();
-          console.log('✅ 搜索框已聚焦');
-        }
-      }, 50);
+      setTimeout(() => document.getElementById('search-input')?.focus(), 50);
     }
   });
 });
@@ -99,30 +94,22 @@ function _initSearchInput() {
   const input = document.getElementById('search-input');
   const clearBtn = document.getElementById('search-clear-btn');
 
-  if (!input) {
-    console.warn('⚠️ 搜索输入框未找到！检查 HTML 中是否存在 id="search-input"');
-    return;
-  }
-
-  console.log('✅ 搜索输入框已初始化');
+  if (!input) return;
 
   // 输入事件：防抖处理
   input.addEventListener('input', e => {
     _searchState.query = e.target.value.trim();
     _updateClearButton();
-    console.log('⌨️ 输入内容:', _searchState.query);
 
-    // 清除上一次的定时器
     if (_searchTimer) clearTimeout(_searchTimer);
 
-    // 防抖 300ms 后搜索（或在用户停止输入时搜索）
     if (_searchState.query.length > 0) {
-      console.log('⏳ 防抖中... 300ms 后搜索');
       _searchTimer = setTimeout(() => {
-        console.log('▶️ 触发搜索...');
         _searchState.page = 1;
         _doSearch();
       }, 300);
+    } else if (!_searchState.type) {
+      _showEmptyState();
     }
   });
 
@@ -130,7 +117,6 @@ function _initSearchInput() {
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      console.log('⏎ 按下回车，立即搜索');
       if (_searchTimer) clearTimeout(_searchTimer);
       _searchState.page = 1;
       _doSearch();
@@ -145,7 +131,12 @@ function _initSearchInput() {
       _searchState.page = 1;
       _updateClearButton();
       input.focus();
-      _showEmptyState();
+      // 如果有 type 筛选，仍然按类型浏览；否则显示空状态
+      if (_searchState.type) {
+        _doSearch();
+      } else {
+        _showEmptyState();
+      }
     });
   }
 }
@@ -308,32 +299,20 @@ async function _doSearch() {
     });
 
     const url = `${App.API_BASE}/api/search?${params}`;
-    console.log('🔍 搜索请求:', { url, ...Object.fromEntries(params) });
-
     const res = await fetch(url);
 
     if (!res.ok) {
       const errData = await res.text();
-      console.error(`❌ 搜索 API 错误 (${res.status}):`, errData);
       App.showToast(`搜索失败 (${res.status}): ${res.statusText}`, 'error');
       _showEmptyResults();
       return;
     }
 
     const data = await res.json();
-    console.log('✅ 搜索响应:', data);
 
-    // API 返回的是 "items" 而不是 "results"
     _searchState.results = data.items || data.results || [];
     _searchState.totalResults = data.total || 0;
     _searchState.totalPages = Math.ceil(_searchState.totalResults / _searchState.pageSize) || 1;
-
-    console.log('📊 搜索结果统计:', {
-      resultCount: _searchState.results.length,
-      totalResults: _searchState.totalResults,
-      totalPages: _searchState.totalPages,
-      results: _searchState.results,
-    });
 
     if (_searchState.results.length === 0) {
       _showEmptyResults();
@@ -344,8 +323,7 @@ async function _doSearch() {
     }
 
   } catch (err) {
-    console.error('❌ 搜索异常:', err);
-    App.showToast(`搜索异常: ${err.message}`, 'error');
+    App.showToast(`搜索失败: ${err.message}`, 'error');
     _showEmptyResults();
   } finally {
     _searchState.isLoading = false;
@@ -359,25 +337,14 @@ function _renderResults() {
   const resultsList = document.getElementById('search-results-list');
   const header = document.getElementById('search-result-header');
 
-  if (!resultsList) {
-    console.error('❌ 搜索结果列表容器不存在！id="search-results-list"');
-    return;
-  }
+  if (!resultsList) return;
 
   if (_searchState.results.length === 0) {
-    console.warn('⚠️ 搜索结果为空');
     _showEmptyResults();
     return;
   }
 
-  console.log(`📝 开始渲染 ${_searchState.results.length} 条结果...`);
-
-  resultsList.innerHTML = _searchState.results.map((file, idx) => {
-    // 调试：打印第一个文件的完整结构
-    if (idx === 0) {
-      console.log('🔍 第一个文件对象结构:', file);
-    }
-
+  resultsList.innerHTML = _searchState.results.map((file) => {
     const cfg = FILE_TYPE_CONFIG[file.file_type] || FILE_TYPE_CONFIG.other;
     // API 返回 file_path 而不是 path
     const filePath = file.file_path || file.path || '';
@@ -446,8 +413,6 @@ function _renderResults() {
     `;
   }).join('');
 
-  console.log(`✅ HTML 生成完成，长度: ${resultsList.innerHTML.length} 字符`);
-
   // 刷新 Lucide 图标
   lucide.createIcons({ nodes: [resultsList] });
 
@@ -456,20 +421,25 @@ function _renderResults() {
     header.classList.remove('hidden');
     const countEl = document.getElementById('search-result-count');
     if (countEl) countEl.textContent = _searchState.totalResults.toLocaleString();
-    console.log('✅ 结果计数已更新:', _searchState.totalResults);
   }
-
-  console.log('✅ 渲染完成！结果应该已显示在页面上');
 }
 
 // ──────────────────────────────────────────────
-// 高亮关键词
+// 高亮关键词（先转义 HTML，再高亮）
 // ──────────────────────────────────────────────
 function _highlightQuery(text, query) {
-  if (!query || query.length === 0) return text;
-
-  const regex = new RegExp(`(${query})`, 'gi');
-  return text.replace(regex, '<strong class="text-stone-900 font-semibold">$1</strong>');
+  if (!text) return '';
+  // 先转义 HTML，防止 XSS
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  if (!query || query.length === 0) return escaped;
+  // 转义正则特殊字符
+  const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${safeQuery})`, 'gi');
+  return escaped.replace(regex, '<strong class="text-blue-600 font-semibold">$1</strong>');
 }
 
 // ──────────────────────────────────────────────
@@ -512,32 +482,19 @@ async function _openDir(fileId) {
 async function _copyPath(fileId) {
   try {
     const res = await fetch(`${App.API_BASE}/api/files/${fileId}/path`);
-    if (!res.ok) {
-      const errData = await res.text();
-      console.error(`❌ 获取文件路径失败 (${res.status}):`, errData);
-      throw new Error(`获取路径失败 (${res.status})`);
-    }
+    if (!res.ok) throw new Error(`获取路径失败 (${res.status})`);
 
     const data = await res.json();
-    console.log('📋 文件路径 API 响应:', data);
-
-    // API 可能返回 file_path 或 path
     const path = data.file_path || data.path || '';
 
     if (!path) {
-      console.warn('⚠️ 路径为空');
       App.showToast('无法获取文件路径', 'error');
       return;
     }
 
-    console.log('✅ 准备复制路径:', path);
-
-    // 复制到剪贴板
     await navigator.clipboard.writeText(path);
-    console.log('✅ 路径已复制到剪贴板');
     App.showToast('已复制路径', 'success', 2000);
   } catch (err) {
-    console.error('❌ 复制路径异常:', err);
     App.showToast(`复制失败: ${err.message}`, 'error');
   }
 }
@@ -609,12 +566,22 @@ function _showResultsSection() {
 // ──────────────────────────────────────────────
 function _initGlobalKeyboardShortcuts() {
   document.addEventListener('keydown', e => {
-    // "/" 聚焦搜索框
+    // "/" 聚焦搜索框（在输入框内按 / 时忽略）
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      const input = document.getElementById('search-input');
-      if (input && document.activeElement !== input) {
+      const activeEl = document.activeElement;
+      const isEditable = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.isContentEditable
+      );
+      if (!isEditable) {
         e.preventDefault();
-        input.focus();
+        if (App.currentView !== 'search') {
+          App.switchView('search');
+          setTimeout(() => document.getElementById('search-input')?.focus(), 60);
+        } else {
+          document.getElementById('search-input')?.focus();
+        }
       }
     }
   });

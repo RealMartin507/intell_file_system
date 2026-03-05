@@ -2,6 +2,24 @@
    自定义样式 — 仅用于 Tailwind 无法覆盖的部分
    ========================================================= */
 
+/* ---- 全局中文排版优化 ---- */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+/* 中文段落增加行高与字间距，阅读更舒适 */
+p, li, td, th {
+  line-height: 1.75;
+}
+/* 标题字间距微调 */
+h1, h2, h3 {
+  letter-spacing: 0.01em;
+}
+
 /* ---- 减少动效：尊重用户系统偏好 ---- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -46,6 +64,7 @@
   to   { opacity: 1; transform: translateY(0);   }
 }
 .search-results-enter { animation: fadeInUp 200ms ease-out both; }
+.animate-fadeInUp { animation: fadeInUp 200ms ease-out both; }
 
 /* ---- 扫描进度条：不定态动效 ---- */
 @keyframes scanSlide {
@@ -67,3 +86,26 @@
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: #DDD8D0; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #c8c2ba; }
+
+/* ---- 搜索结果项进入动效 ---- */
+#search-results-list > div {
+  animation: fadeInUp 180ms ease-out both;
+}
+#search-results-list > div:nth-child(n+6) {
+  animation-delay: 20ms;
+}
+
+/* ---- 类型筛选标签聚焦态 ---- */
+#search-type-filters button:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+}
+
+/* ---- 导航项聚焦态 ---- */
+.nav-item:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 1px;
+}
+
+/* ---- AI 视图消息区滚动条更细 ---- */
+#ai-messages-container::-webkit-scrollbar { width: 4px; }
