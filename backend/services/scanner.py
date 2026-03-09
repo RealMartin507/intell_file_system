@@ -32,6 +32,7 @@ class ScanState:
     modified: int = 0              # 修改文件数（增量扫描）
     started_at: Optional[str] = None
     error: Optional[str] = None
+    scan_method: str = "scandir"   # "mft"（MFT直读）或 "scandir"（os.scandir回退）
 
 
 _state = ScanState()
@@ -39,7 +40,7 @@ _state = ScanState()
 # 只允许同时运行一个扫描任务
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner")
 
-_BATCH_SIZE = 1000  # 每批写入条数
+_BATCH_SIZE = 20000  # 每批写入条数
 
 
 def get_state() -> ScanState:
@@ -107,6 +108,22 @@ def _run_full_scan(
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-32768")   # 32 MB 缓存
 
+    # ── 预判断 MFT 可用性（在 DB 操作之前，避免回滚复杂度）──────────────────
+    _mft_mod = None
+    _drive_letter: str = ""
+    try:
+        from backend.services import mft_scanner as _m
+        if _m.is_admin():
+            drive = Path(root_path).drive          # "C:"
+            dl = drive.rstrip(":").strip().upper() # "C"
+            if dl and len(dl) == 1 and dl.isalpha():
+                _mft_mod = _m
+                _drive_letter = dl
+    except ImportError:
+        pass
+
+    _state.scan_method = "mft" if _mft_mod else "scandir"
+
     try:
         # 1. 创建扫描日志
         cur = conn.execute(
@@ -117,13 +134,31 @@ def _run_full_scan(
         scan_id: int = cur.lastrowid
         _state.scan_id = scan_id
 
-        # 2. 清空旧数据（全量扫描覆盖）
-        # FTS5 content 表：rebuild 会自动清理，无需手动删 FTS 行
+        # 2. 清空旧数据 + 清空 FTS 索引
         conn.execute("DELETE FROM file_snapshots")
         conn.execute("DELETE FROM files")
+        conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
         conn.commit()
 
-        # 3. 遍历文件系统，批量写入
+        # 3a. 尝试 MFT 快速通道
+        if _mft_mod:
+            try:
+                _run_full_scan_mft(
+                    conn, _mft_mod, _drive_letter,
+                    root_path, disk_label, exclude_dirs, exclude_patterns, scan_id,
+                )
+                return
+            except (PermissionError, OSError, RuntimeError, ValueError):
+                # 静默 fallback：重新清空（MFT 可能已写入部分数据）
+                conn.execute("DELETE FROM file_snapshots")
+                conn.execute("DELETE FROM files")
+                conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+                conn.commit()
+                _state.scan_method = "scandir"
+                _state.added = 0
+                _state.scanned_count = 0
+
+        # 3b. os.scandir 通用通道
         batch: list[dict] = []
         added = 0
         root_depth = len(Path(root_path).parts)
@@ -134,21 +169,17 @@ def _run_full_scan(
             _state.current_dir = record["parent_dir"]
 
             if len(batch) >= _BATCH_SIZE:
-                _insert_batch(conn, batch, scan_id)
+                _insert_batch(conn, batch, scan_id, sync_fts=True)
                 added += len(batch)
                 _state.added = added
                 batch.clear()
 
         if batch:
-            _insert_batch(conn, batch, scan_id)
+            _insert_batch(conn, batch, scan_id, sync_fts=True)
             added += len(batch)
             _state.added = added
 
-        # 4. 重建 FTS5 全文索引
-        conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
-        conn.commit()
-
-        # 5. 更新扫描日志为完成
+        # 4. 更新扫描日志为完成
         conn.execute(
             "UPDATE scan_logs SET finished_at=?, total_files=?, added=?, status=? WHERE id=?",
             (datetime.now().isoformat(), added, added, "completed", scan_id),
@@ -175,6 +206,67 @@ def _run_full_scan(
         conn.close()
 
 
+def _run_full_scan_mft(
+    conn,
+    mft_mod,
+    drive_letter: str,
+    root_path: str,
+    disk_label: str,
+    exclude_dirs: list[str],
+    exclude_patterns: list[str],
+    scan_id: int,
+) -> None:
+    """
+    MFT 快速通道：调用 mft_scanner.scan_volume()，
+    在 batch_callback 中过滤路径、应用排除规则，
+    然后复用现有 _insert_batch() 写入 DB。
+    """
+    global _state
+
+    root_norm      = os.path.normcase(root_path.rstrip("\\/"))
+    root_prefix    = root_norm + os.sep          # 用于前缀匹配
+    root_depth     = len(Path(root_path).parts)
+    exclude_set    = set(exclude_dirs)
+    added          = 0
+
+    def _callback(records: list[dict]) -> None:
+        nonlocal added
+        filtered: list[dict] = []
+
+        for r in records:
+            fp_norm = os.path.normcase(r["file_path"])
+            # 仅保留 root_path 下的文件
+            if fp_norm != root_norm and not fp_norm.startswith(root_prefix):
+                continue
+            # 排除目录名匹配（检查路径各组成部分）
+            parts = Path(r["file_path"]).parts
+            if any(p in exclude_set for p in parts[:-1]):
+                continue
+            # 排除文件名通配符模式
+            if _matches_patterns(r["file_name"], exclude_patterns):
+                continue
+            # 修正 dir_depth：相对 root_path（而非卷根）
+            r["dir_depth"] = len(parts) - root_depth
+            filtered.append(r)
+
+        if filtered:
+            _insert_batch(conn, filtered, scan_id, sync_fts=True)
+            added += len(filtered)
+            _state.added = added
+            _state.scanned_count += len(filtered)
+            _state.current_dir = filtered[-1]["parent_dir"]
+
+    mft_mod.scan_volume(drive_letter, _callback, _BATCH_SIZE, disk_label)
+
+    conn.execute(
+        "UPDATE scan_logs SET finished_at=?, total_files=?, added=?, status=? WHERE id=?",
+        (datetime.now().isoformat(), added, added, "completed", scan_id),
+    )
+    conn.commit()
+    _state.status = "completed"
+    _state.added = added
+
+
 # ─── 增量扫描主函数（在后台线程中执行）────────────────────────────────────────
 
 def _run_incremental_scan(
@@ -190,7 +282,14 @@ def _run_incremental_scan(
     conn.execute("PRAGMA cache_size=-32768")
 
     try:
-        # 1. 创建扫描日志
+        # 1. 无快照时自动回退全量扫描（关闭当前连接，不留悬空事务）
+        if not conn.execute("SELECT 1 FROM file_snapshots LIMIT 1").fetchone():
+            conn.close()
+            conn = None
+            _run_full_scan(root_path, disk_label, exclude_dirs, exclude_patterns)
+            return
+
+        # 2. 创建扫描日志
         cur = conn.execute(
             "INSERT INTO scan_logs (scan_type, root_path, started_at, status) VALUES (?, ?, ?, ?)",
             ("incremental", root_path, _state.started_at, "running"),
@@ -199,87 +298,158 @@ def _run_incremental_scan(
         scan_id: int = cur.lastrowid
         _state.scan_id = scan_id
 
-        # 2. 加载旧快照：{file_path -> (modified_time, file_size)}
-        rows = conn.execute(
-            "SELECT file_path, modified_time, file_size FROM file_snapshots"
-        ).fetchall()
-        old_snapshots: dict[str, tuple] = {
-            r["file_path"]: (r["modified_time"], r["file_size"]) for r in rows
-        }
+        # 3. 创建临时表（TEMP TABLE 随连接结束自动销毁，写入磁盘临时库，不占 Python 堆内存）
+        conn.execute("DROP TABLE IF EXISTS temp_scan_snapshot")
+        conn.execute("""
+            CREATE TEMP TABLE temp_scan_snapshot (
+                path             TEXT PRIMARY KEY,
+                mtime            TEXT,
+                size             INTEGER,
+                file_name        TEXT,
+                file_name_no_ext TEXT,
+                extension        TEXT,
+                created_time     TEXT,
+                parent_dir       TEXT,
+                dir_depth        INTEGER,
+                file_type        TEXT,
+                shapefile_group  TEXT,
+                disk_label       TEXT
+            )
+        """)
 
-        # 3. 遍历文件系统，生成新记录列表
-        new_records: list[dict] = []
+        # 4. 遍历文件系统，批量写入临时表（内存中最多保留 _BATCH_SIZE 条）
+        batch: list[dict] = []
         root_depth = len(Path(root_path).parts)
+
         for record in _walk(root_path, root_depth, exclude_dirs, exclude_patterns, disk_label):
-            new_records.append(record)
+            batch.append(record)
             _state.scanned_count += 1
             _state.current_dir = record["parent_dir"]
 
-        # 4. 构建新快照映射：{file_path -> record dict}
-        new_snapshot: dict[str, dict] = {r["file_path"]: r for r in new_records}
+            if len(batch) >= _BATCH_SIZE:
+                conn.executemany(_TEMP_INSERT_SQL, batch)
+                conn.commit()
+                batch.clear()
 
-        old_paths = set(old_snapshots.keys())
-        new_paths = set(new_snapshot.keys())
+        if batch:
+            conn.executemany(_TEMP_INSERT_SQL, batch)
+            conn.commit()
+            batch.clear()
 
-        added_paths = new_paths - old_paths
-        deleted_paths = old_paths - new_paths
-        modified_paths = {
-            p for p in old_paths & new_paths
-            if (new_snapshot[p]["modified_time"], new_snapshot[p]["file_size"]) != old_snapshots[p]
-        }
+        # 5. SQL 侧三路对比（全程不把快照拉入 Python 内存）
+        added = conn.execute("""
+            SELECT COUNT(*) FROM temp_scan_snapshot
+            WHERE path NOT IN (SELECT file_path FROM file_snapshots)
+        """).fetchone()[0]
 
-        # 5. 处理新增文件
-        added = len(added_paths)
-        if added_paths:
-            add_batch = [new_snapshot[p] for p in added_paths]
-            for i in range(0, len(add_batch), _BATCH_SIZE):
-                chunk = add_batch[i : i + _BATCH_SIZE]
-                conn.executemany(_INSERT_SQL, chunk)
-                conn.executemany(
-                    _SNAPSHOT_SQL,
-                    [{"file_path": r["file_path"], "modified_time": r["modified_time"],
-                      "file_size": r["file_size"], "scan_id": scan_id} for r in chunk],
+        deleted = conn.execute("""
+            SELECT COUNT(*) FROM file_snapshots
+            WHERE file_path NOT IN (SELECT path FROM temp_scan_snapshot)
+        """).fetchone()[0]
+
+        modified = conn.execute("""
+            SELECT COUNT(*) FROM temp_scan_snapshot t
+            JOIN file_snapshots s ON t.path = s.file_path
+            WHERE t.mtime != s.modified_time OR t.size != s.file_size
+        """).fetchone()[0]
+
+        # 6. 处理新增文件：INSERT files → 同步插入 FTS
+        if added:
+            conn.execute("""
+                INSERT OR IGNORE INTO files
+                    (file_name, file_name_no_ext, extension, file_size, created_time,
+                     modified_time, file_path, parent_dir, dir_depth, file_type,
+                     shapefile_group, disk_label)
+                SELECT file_name, file_name_no_ext, extension, size, created_time,
+                       mtime, path, parent_dir, dir_depth, file_type,
+                       shapefile_group, disk_label
+                FROM temp_scan_snapshot
+                WHERE path NOT IN (SELECT file_path FROM file_snapshots)
+            """)
+            conn.commit()
+            # 新增文件写入 files 后，同步插入 FTS 索引
+            conn.execute("""
+                INSERT INTO files_fts(rowid, file_name, file_path, file_type)
+                SELECT id, file_name, file_path, file_type FROM files
+                WHERE file_path IN (
+                    SELECT path FROM temp_scan_snapshot
+                    WHERE path NOT IN (SELECT file_path FROM file_snapshots)
                 )
-                conn.commit()
-                _state.added = i + len(chunk)
+            """)
+            conn.commit()
+            _state.added = added
 
-        # 6. 处理删除文件
-        deleted = len(deleted_paths)
-        if deleted_paths:
-            del_list = list(deleted_paths)
-            for i in range(0, len(del_list), _BATCH_SIZE):
-                chunk = del_list[i : i + _BATCH_SIZE]
-                placeholders = ",".join("?" * len(chunk))
-                conn.execute(f"DELETE FROM files WHERE file_path IN ({placeholders})", chunk)
-                conn.execute(f"DELETE FROM file_snapshots WHERE file_path IN ({placeholders})", chunk)
-                conn.commit()
+        # 7. 处理删除文件：先删 FTS 条目（content FTS 需在 files 记录存在时读取文本），再删 files
+        if deleted:
+            conn.execute("""
+                DELETE FROM files_fts WHERE rowid IN (
+                    SELECT id FROM files
+                    WHERE file_path IN (
+                        SELECT file_path FROM file_snapshots
+                        WHERE file_path NOT IN (SELECT path FROM temp_scan_snapshot)
+                    )
+                )
+            """)
+            conn.execute("""
+                DELETE FROM files
+                WHERE file_path IN (
+                    SELECT file_path FROM file_snapshots
+                    WHERE file_path NOT IN (SELECT path FROM temp_scan_snapshot)
+                )
+            """)
+            conn.commit()
             _state.deleted = deleted
 
-        # 7. 处理修改文件（INSERT OR REPLACE 覆盖旧记录并更新快照）
-        modified = len(modified_paths)
-        if modified_paths:
-            mod_batch = [new_snapshot[p] for p in modified_paths]
-            for i in range(0, len(mod_batch), _BATCH_SIZE):
-                chunk = mod_batch[i : i + _BATCH_SIZE]
-                conn.executemany(_INSERT_SQL, chunk)
-                conn.executemany(
-                    _SNAPSHOT_SQL,
-                    [{"file_path": r["file_path"], "modified_time": r["modified_time"],
-                      "file_size": r["file_size"], "scan_id": scan_id} for r in chunk],
+        # 8. 处理修改文件：先删旧 FTS 条目 → INSERT OR REPLACE → 插入新 FTS 条目
+        # INSERT OR REPLACE 会分配新 rowid，因此需要在替换后重新插入 FTS
+        if modified:
+            conn.execute("""
+                DELETE FROM files_fts WHERE rowid IN (
+                    SELECT f.id FROM files f
+                    JOIN file_snapshots s ON f.file_path = s.file_path
+                    JOIN temp_scan_snapshot t ON s.file_path = t.path
+                    WHERE t.mtime != s.modified_time OR t.size != s.file_size
                 )
-                conn.commit()
+            """)
+            conn.execute("""
+                INSERT OR REPLACE INTO files
+                    (file_name, file_name_no_ext, extension, file_size, created_time,
+                     modified_time, file_path, parent_dir, dir_depth, file_type,
+                     shapefile_group, disk_label)
+                SELECT t.file_name, t.file_name_no_ext, t.extension, t.size, t.created_time,
+                       t.mtime, t.path, t.parent_dir, t.dir_depth, t.file_type,
+                       t.shapefile_group, t.disk_label
+                FROM temp_scan_snapshot t
+                JOIN file_snapshots s ON t.path = s.file_path
+                WHERE t.mtime != s.modified_time OR t.size != s.file_size
+            """)
+            conn.commit()
+            # 用新 rowid 插入 FTS（INSERT OR REPLACE 后文件已有新 id）
+            conn.execute("""
+                INSERT INTO files_fts(rowid, file_name, file_path, file_type)
+                SELECT id, file_name, file_path, file_type FROM files
+                WHERE file_path IN (
+                    SELECT t.path FROM temp_scan_snapshot t
+                    JOIN file_snapshots s ON t.path = s.file_path
+                    WHERE t.mtime != s.modified_time OR t.size != s.file_size
+                )
+            """)
+            conn.commit()
             _state.modified = modified
 
-        # 8. 仅当有变更时重建 FTS5 全文索引
-        if added or deleted or modified:
-            conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
-            conn.commit()
+        # 9. 替换 file_snapshots：DELETE ALL + INSERT FROM temp（全 SQL，单事务）
+        conn.execute("DELETE FROM file_snapshots")
+        conn.execute("""
+            INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id)
+            SELECT path, mtime, size, ?
+            FROM temp_scan_snapshot
+        """, (scan_id,))
+        conn.commit()
 
-        # 9. 更新扫描日志
-        total = len(new_paths)
+        # 10. 更新扫描日志（FTS 已在各变更操作中同步，无需 rebuild）
         conn.execute(
             "UPDATE scan_logs SET finished_at=?, total_files=?, added=?, deleted=?, modified=?, status=? WHERE id=?",
-            (datetime.now().isoformat(), total, added, deleted, modified, "completed", scan_id),
+            (datetime.now().isoformat(), _state.scanned_count, added, deleted, modified, "completed", scan_id),
         )
         conn.commit()
 
@@ -291,7 +461,7 @@ def _run_incremental_scan(
     except Exception as exc:
         _state.status = "failed"
         _state.error = str(exc)
-        if _state.scan_id:
+        if _state.scan_id and conn is not None:
             try:
                 conn.execute(
                     "UPDATE scan_logs SET finished_at=?, status=? WHERE id=?",
@@ -302,7 +472,8 @@ def _run_incremental_scan(
                 pass
         raise
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 # ─── 目录遍历（生成器）──────────────────────────────────────────────────────────
@@ -439,8 +610,33 @@ INSERT OR REPLACE INTO file_snapshots (file_path, modified_time, file_size, scan
 VALUES (:file_path, :modified_time, :file_size, :scan_id)
 """
 
+# 增量扫描：将文件系统快照写入临时表（复用 _walk 返回的 record 字段名）
+_TEMP_INSERT_SQL = """
+INSERT OR REPLACE INTO temp_scan_snapshot
+    (path, mtime, size, file_name, file_name_no_ext, extension,
+     created_time, parent_dir, dir_depth, file_type, shapefile_group, disk_label)
+VALUES
+    (:file_path, :modified_time, :file_size, :file_name, :file_name_no_ext, :extension,
+     :created_time, :parent_dir, :dir_depth, :file_type, :shapefile_group, :disk_label)
+"""
 
-def _insert_batch(conn, batch: list[dict], scan_id: int) -> None:
+
+_FTS_CHUNK = 500  # 每次 FTS 批量插入的路径数（避免超出 SQLite 参数数量上限 999）
+
+
+def _fts_insert_by_paths(conn, paths: list[str]) -> None:
+    """按文件路径批量同步 FTS 索引，分块执行以避免 SQLite 参数上限。"""
+    for i in range(0, len(paths), _FTS_CHUNK):
+        sub = paths[i : i + _FTS_CHUNK]
+        ph = ",".join("?" * len(sub))
+        conn.execute(
+            "INSERT INTO files_fts(rowid, file_name, file_path, file_type) "
+            f"SELECT id, file_name, file_path, file_type FROM files WHERE file_path IN ({ph})",
+            sub,
+        )
+
+
+def _insert_batch(conn, batch: list[dict], scan_id: int, sync_fts: bool = False) -> None:
     conn.executemany(_INSERT_SQL, batch)
     conn.executemany(
         _SNAPSHOT_SQL,
@@ -454,4 +650,7 @@ def _insert_batch(conn, batch: list[dict], scan_id: int) -> None:
             for r in batch
         ],
     )
+    if sync_fts:
+        # 在同一事务内（executemany 未 commit），新插入行对本连接可见，可直接查询
+        _fts_insert_by_paths(conn, [r["file_path"] for r in batch])
     conn.commit()

@@ -17,7 +17,7 @@
         "Thumbs.db",
         "desktop.ini"
     ],
-    "auto_scan_interval_minutes": 30,
+    "auto_scan_interval_minutes": 60,
     "server_port": 8000,
     "thumbnail_cache_dir": "./data/thumbnails"
 }
