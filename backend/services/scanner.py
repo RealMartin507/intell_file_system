@@ -14,7 +14,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Iterator, Optional
 
 from backend.database import get_db
@@ -111,9 +110,9 @@ def _run_full_scan(
     logger.info("[SCAN] === 开始全量扫描 root=%s ===", root_path)
 
     conn = get_db()
-    # WAL 模式 + 减少 fsync 次数，大幅提升批量写入速度
+    # WAL 模式 + 扫描期间关闭 fsync（扫描丢失最多重新扫描，代价极低）
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA synchronous=OFF")
     conn.execute("PRAGMA cache_size=-32768")   # 32 MB 缓存
 
     # ── 预判断 MFT 可用性（在 DB 操作之前，避免回滚复杂度）──────────────────
@@ -124,8 +123,8 @@ def _run_full_scan(
         admin_status = _m.is_admin()
         logger.info("[SCAN] 权限检测: is_admin=%s", admin_status)
         if admin_status:
-            drive = Path(root_path).drive          # "C:"
-            dl = drive.rstrip(":").strip().upper() # "C"
+            drive = root_path[:2] if len(root_path) >= 2 and root_path[1] == ':' else ""  # "C:"
+            dl = drive[0].upper() if drive else ""  # "C"
             if dl and len(dl) == 1 and dl.isalpha():
                 _mft_mod = _m
                 _drive_letter = dl
@@ -151,10 +150,10 @@ def _run_full_scan(
         _state.scan_id = scan_id
 
         # 2. 全量扫描前删除索引（DELETE + 后续 INSERT 都快很多），再清空数据
+        # 注意：files 清空后无需 FTS rebuild，末尾写完数据后统一 rebuild 一次
         _drop_full_scan_indexes(conn)
         conn.execute("DELETE FROM file_snapshots")
         conn.execute("DELETE FROM files")
-        conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
         conn.commit()
 
         # 3a. 尝试 MFT 快速通道
@@ -172,7 +171,6 @@ def _run_full_scan(
                 # fallback：重新清空（MFT 可能已写入部分数据），索引已删无需再删
                 conn.execute("DELETE FROM file_snapshots")
                 conn.execute("DELETE FROM files")
-                conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
                 conn.commit()
                 # 注意：此时索引已在步骤2中删除，scandir 路径末尾会重建
                 _state.scan_method = "scandir"
@@ -183,7 +181,7 @@ def _run_full_scan(
         # 3b. os.scandir 通用通道
         batch: list[dict] = []
         added = 0
-        root_depth = len(Path(root_path).parts)
+        root_depth = root_path.replace('/', os.sep).rstrip(os.sep).count(os.sep) + 1
 
         for record in _walk(root_path, root_depth, exclude_dirs, exclude_patterns, disk_label):
             batch.append(record)
@@ -231,7 +229,6 @@ def _run_full_scan(
         )
         logger.info("[SCAN] === 全量扫描完成(scandir) 总耗时=%.2fs ===", elapsed)
         logger.info("=" * 50)
-        _try_auto_start_usn(root_path)
 
     except Exception as exc:
         _state.status = "failed"
@@ -251,25 +248,6 @@ def _run_full_scan(
         conn.close()
 
 
-def _try_auto_start_usn(root_path: str) -> None:
-    """全量扫描完成后自动启动 USN Journal 监控（仅管理员模式下生效）。"""
-    logger.info("[SCAN] 尝试自动启动USN Journal监控...")
-    try:
-        from backend.services import mft_scanner as _m
-        admin = _m.is_admin()
-        logger.info("[SCAN] USN启动前权限检查: is_admin=%s", admin)
-        if not admin:
-            logger.info("[SCAN] 非管理员权限，跳过USN监控自动启动")
-            return
-        from backend.services import usn_monitor
-        result = usn_monitor.start_monitoring([root_path])
-        logger.info(
-            "[SCAN] USN监控自动启动结果: started=%s, already_running=%s",
-            result["started"], result["already_running"],
-        )
-    except Exception as exc:
-        logger.warning("[SCAN] USN监控自动启动失败（非致命）: %s", exc, exc_info=True)
-
 
 def _run_full_scan_mft(
     conn,
@@ -288,9 +266,8 @@ def _run_full_scan_mft(
     """
     global _state
 
-    root_norm      = os.path.normcase(root_path.rstrip("\\/"))
+    root_norm      = root_path.rstrip("\\/").lower()
     root_prefix    = root_norm + os.sep          # 用于前缀匹配
-    root_depth     = len(Path(root_path).parts)
     exclude_set    = set(exclude_dirs)
     added          = 0
     batch_no       = 0
@@ -305,24 +282,26 @@ def _run_full_scan_mft(
     # 让前端在 MFT 读取阶段（约 4s）也能看到有效状态，而非 scanned=0
     _state.current_dir = "正在读取 MFT 元数据..."
 
+    _sep = os.sep
+
     def _callback(records: list[dict]) -> None:
         nonlocal added, batch_no
         filtered: list[dict] = []
 
         for r in records:
-            fp_norm = os.path.normcase(r["file_path"])
+            fp = r["file_path"]
+            fp_norm = fp.lower()
             # 仅保留 root_path 下的文件
             if fp_norm != root_norm and not fp_norm.startswith(root_prefix):
                 continue
-            # 排除目录名匹配（检查路径各组成部分）
-            parts = Path(r["file_path"]).parts
-            if any(p in exclude_set for p in parts[:-1]):
+            # 排除目录名匹配（检查路径中间各部分，用字符串分割替代 Path.parts）
+            parent = r["parent_dir"]
+            if any(part in exclude_set for part in parent.split(_sep)):
                 continue
             # 排除文件名通配符模式
             if _matches_patterns(r["file_name"], exclude_patterns):
                 continue
-            # 修正 dir_depth：相对 root_path（而非卷根）
-            r["dir_depth"] = len(parts) - root_depth
+            # dir_depth 已在 mft_scanner 内按 drive_root 计算，无需修正
             filtered.append(r)
 
         if filtered:
@@ -390,7 +369,6 @@ def _run_full_scan_mft(
     _state.added = added
     logger.info("[SCAN] === 全量扫描完成(MFT) 总写入=%d条 ===", added)
     logger.info("=" * 50)
-    _try_auto_start_usn(root_path)
 
 
 # ─── 增量扫描主函数（在后台线程中执行）────────────────────────────────────────
@@ -445,7 +423,7 @@ def _run_incremental_scan(
 
         # 4. 遍历文件系统，批量写入临时表（内存中最多保留 _BATCH_SIZE 条）
         batch: list[dict] = []
-        root_depth = len(Path(root_path).parts)
+        root_depth = root_path.replace('/', os.sep).rstrip(os.sep).count(os.sep) + 1
 
         for record in _walk(root_path, root_depth, exclude_dirs, exclude_patterns, disk_label):
             batch.append(record)
@@ -658,10 +636,20 @@ def _matches_patterns(name: str, patterns: list[str]) -> bool:
 
 
 def _file_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
-    path = Path(entry.path)
-    stem = path.stem
-    ext = path.suffix.lower()
-    depth = len(path.parts) - root_depth
+    fp   = entry.path
+    name = entry.name
+    # 扩展名：从文件名找最后一个点（os.DirEntry.name 已是纯文件名）
+    dot_idx = name.rfind('.')
+    if dot_idx > 0:
+        ext  = name[dot_idx:].lower()
+        stem = name[:dot_idx]
+    else:
+        ext  = ""
+        stem = name
+    # 父目录：找路径最后一个分隔符
+    sep_idx    = fp.rfind(os.sep)
+    parent_dir = fp[:sep_idx] if sep_idx >= 0 else fp
+    depth      = fp.count(os.sep) - root_depth + 1
 
     try:
         stat = entry.stat()
@@ -671,18 +659,18 @@ def _file_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
     except OSError:
         size, ctime, mtime = 0, None, None
 
-    # Shapefile 分组：同目录同名文件共享 group 标识（绝对路径去扩展名）
-    shapefile_group = str(path.parent / stem) if ext in SHAPEFILE_EXTENSIONS else None
+    # Shapefile 分组：同目录同名文件共享 group 标识（父目录 + 无扩展名）
+    shapefile_group = parent_dir + os.sep + stem if ext in SHAPEFILE_EXTENSIONS else None
 
     return {
-        "file_name": path.name,
+        "file_name": name,
         "file_name_no_ext": stem,
         "extension": ext,
         "file_size": size,
         "created_time": ctime,
         "modified_time": mtime,
-        "file_path": entry.path,
-        "parent_dir": str(path.parent),
+        "file_path": fp,
+        "parent_dir": parent_dir,
         "dir_depth": depth,
         "file_type": get_file_type(ext),
         "shapefile_group": shapefile_group,
@@ -692,8 +680,13 @@ def _file_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
 
 def _gdb_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
     """.gdb 目录作为一条 gis_vector 记录写入，不递归。"""
-    path = Path(entry.path)
-    depth = len(path.parts) - root_depth
+    fp      = entry.path
+    name    = entry.name
+    sep_idx = fp.rfind(os.sep)
+    parent_dir = fp[:sep_idx] if sep_idx >= 0 else fp
+    dot_idx = name.rfind('.')
+    stem    = name[:dot_idx] if dot_idx > 0 else name
+    depth   = fp.count(os.sep) - root_depth + 1
 
     try:
         stat = entry.stat()
@@ -703,14 +696,14 @@ def _gdb_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
         ctime, mtime = None, None
 
     return {
-        "file_name": path.name,
-        "file_name_no_ext": path.stem,
+        "file_name": name,
+        "file_name_no_ext": stem,
         "extension": ".gdb",
         "file_size": 0,
         "created_time": ctime,
         "modified_time": mtime,
-        "file_path": entry.path,
-        "parent_dir": str(path.parent),
+        "file_path": fp,
+        "parent_dir": parent_dir,
         "dir_depth": depth,
         "file_type": "gis_vector",
         "shapefile_group": None,
@@ -720,7 +713,20 @@ def _gdb_record(entry: os.DirEntry, root_depth: int, disk_label: str) -> dict:
 
 # ─── 批量写入 ──────────────────────────────────────────────────────────────────
 
+# 全量扫描：表已清空，直接 INSERT，省去 UNIQUE 约束检查开销
 _INSERT_SQL = """
+INSERT INTO files
+    (file_name, file_name_no_ext, extension, file_size, created_time,
+     modified_time, file_path, parent_dir, dir_depth, file_type,
+     shapefile_group, disk_label)
+VALUES
+    (:file_name, :file_name_no_ext, :extension, :file_size, :created_time,
+     :modified_time, :file_path, :parent_dir, :dir_depth, :file_type,
+     :shapefile_group, :disk_label)
+"""
+
+# 增量扫描修改文件时需要 INSERT OR REPLACE（文件可能已存在）
+_INSERT_OR_REPLACE_SQL = """
 INSERT OR REPLACE INTO files
     (file_name, file_name_no_ext, extension, file_size, created_time,
      modified_time, file_path, parent_dir, dir_depth, file_type,

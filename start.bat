@@ -5,8 +5,8 @@ chcp 65001 >nul
 net session >nul 2>&1
 if %errorlevel% == 0 goto :run
 
-:: 未提权 —— 弹出 UAC 请求管理员权限（MFT 扫描和 USN 监控需要）
-echo 正在请求管理员权限以启用 MFT 快速扫描和 USN 实时监控...
+:: 未提权 —— 弹出 UAC 请求管理员权限（MFT 快速扫描需要）
+echo 正在请求管理员权限以启用 MFT 快速扫描...
 powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
 exit /b
 

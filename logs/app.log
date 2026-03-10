@@ -1,65 +1,56 @@
-[2026-03-09 21:21:21.282] [INFO ] [logging_config] 日志系统初始化完成: file=E:\vibecoding\intell_file_system\logs\app.log
-[2026-03-09 21:21:21.491] [INFO ] [backend.main] ============================================================
-[2026-03-09 21:21:21.491] [INFO ] [backend.main] [STARTUP] ===== 系统启动 =====
-[2026-03-09 21:21:21.492] [INFO ] [backend.main] [STARTUP] Python版本: 3.11.14
-[2026-03-09 21:21:21.492] [INFO ] [backend.main] [STARTUP] 工作目录: E:\vibecoding\intell_file_system
-[2026-03-09 21:21:21.493] [INFO ] [backend.main] [STARTUP] 管理员权限: 是 ✓ (MFT扫描和USN监控可用)
-[2026-03-09 21:21:21.493] [INFO ] [backend.main] [STARTUP] 数据库路径: E:\vibecoding\intell_file_system\data\file_index.db (已存在, 大小: 185.73 MB)
-[2026-03-09 21:21:21.563] [INFO ] [backend.main] [STARTUP] [DB] 当前文件数: 161167, 大小为0的文件: 304 (正常)
-[2026-03-09 21:21:21.564] [INFO ] [backend.main] [STARTUP] ===== 启动完成，监听 http://127.0.0.1:8000 =====
-[2026-03-09 21:21:21.565] [INFO ] [backend.main] ============================================================
-[2026-03-09 21:21:31.938] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=idle method=scandir scanned=0 added=0
-[2026-03-09 21:21:34.873] [INFO ] [backend.routers.scan] [API] POST /scan/start: root_path=E:\, scan_type=full
-[2026-03-09 21:21:34.875] [INFO ] [backend.services.scanner] ==================================================
-[2026-03-09 21:21:34.875] [INFO ] [backend.routers.scan] [API] 扫描任务已提交: actual_type=full, root=E:\
-[2026-03-09 21:21:34.877] [INFO ] [backend.services.scanner] [SCAN] === 开始全量扫描 root=E:\ ===
-[2026-03-09 21:21:34.881] [INFO ] [backend.services.scanner] [SCAN] 权限检测: is_admin=True
-[2026-03-09 21:21:34.882] [INFO ] [backend.services.scanner] [SCAN] 扫描策略选择: MFT直读 (drive=E:)
-[2026-03-09 21:21:34.882] [INFO ] [backend.services.scanner] [SCAN] 确认扫描方法: mft
-[2026-03-09 21:21:35.204] [INFO ] [backend.services.scanner] [SCAN] [DB] MFT扫描前: 文件数=0
-[2026-03-09 21:21:35.205] [INFO ] [backend.services.mft_scanner] [MFT] 打开卷句柄: \\.\E: (drive_root=E:\)
-[2026-03-09 21:21:35.205] [INFO ] [backend.services.mft_scanner] [MFT] 卷参数: rec_size=1024 B, sector_size=512 B, MFT大小=204.8 MB
-[2026-03-09 21:21:35.206] [INFO ] [backend.services.mft_scanner] [MFT] 开始顺序读取 $MFT（偏移=3072.0 MB，大小=204.8 MB）...
-[2026-03-09 21:21:35.908] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
-[2026-03-09 21:21:36.896] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
-[2026-03-09 21:21:37.904] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
-[2026-03-09 21:21:38.896] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
-[2026-03-09 21:21:39.251] [INFO ] [backend.services.mft_scanner] [MFT] $MFT读取完成: 目录=37308, 文件=161193, .gdb=0, 耗时=4.05s
-[2026-03-09 21:21:39.331] [INFO ] [backend.services.mft_scanner] [MFT] 目录路径缓存: 成功=37307, 孤立=1, 耗时=0.08s
-[2026-03-09 21:21:39.905] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
-[2026-03-09 21:21:40.529] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #1 写入: 19995条, 累计: 19995条
-[2026-03-09 21:21:40.894] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=19995 added=19995
-[2026-03-09 21:21:41.700] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #2 写入: 19999条, 累计: 39994条
-[2026-03-09 21:21:41.915] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=39994 added=39994
-[2026-03-09 21:21:42.259] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #3 写入: 20000条, 累计: 59994条
-[2026-03-09 21:21:42.799] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #4 写入: 20000条, 累计: 79994条
-[2026-03-09 21:21:42.901] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=79994 added=79994
-[2026-03-09 21:21:43.346] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #5 写入: 20000条, 累计: 99994条
-[2026-03-09 21:21:43.892] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=99994 added=99994
-[2026-03-09 21:21:43.913] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #6 写入: 19999条, 累计: 119993条
-[2026-03-09 21:21:44.423] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #7 写入: 20000条, 累计: 139993条
-[2026-03-09 21:21:44.892] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=139993 added=139993
-[2026-03-09 21:21:44.973] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #8 写入: 19995条, 累计: 159988条
-[2026-03-09 21:21:45.005] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #9 写入: 1192条, 累计: 161180条
-[2026-03-09 21:21:45.005] [INFO ] [backend.services.mft_scanner] [MFT] 路径解析: 成功=161193, 孤立失败=0 (0.0%)
-[2026-03-09 21:21:45.006] [INFO ] [backend.services.mft_scanner] [MFT] 总耗时=9.80s (MFT读取+解析=4.05s, 目录缓存=0.08s, 路径展开=5.67s)
-[2026-03-09 21:21:45.020] [INFO ] [backend.services.mft_scanner] [MFT] scan_volume完成: total=161193, elapsed=9.80s
-[2026-03-09 21:21:45.776] [INFO ] [backend.services.scanner] [SCAN] 索引重建完成: 耗时=0.75s
-[2026-03-09 21:21:45.889] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=161180 added=161180
-[2026-03-09 21:21:46.471] [INFO ] [backend.services.scanner] [SCAN] 快照批量写入完成: 耗时=0.69s
-[2026-03-09 21:21:46.892] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=161180 added=161180
-[2026-03-09 21:21:47.260] [INFO ] [backend.services.scanner] [SCAN] FTS5索引重建完成: 耗时=0.80s
-[2026-03-09 21:21:47.260] [INFO ] [backend.services.scanner] [SCAN] 后处理总耗时: 2.25s
-[2026-03-09 21:21:47.326] [INFO ] [backend.services.scanner] [SCAN] [DB] MFT扫描后: 文件数=161180, 大小为0的文件=304 (0.2%) (正常)
-[2026-03-09 21:21:47.329] [INFO ] [backend.services.scanner] [SCAN] === 全量扫描完成(MFT) 总写入=161180条 ===
-[2026-03-09 21:21:47.329] [INFO ] [backend.services.scanner] ==================================================
-[2026-03-09 21:21:47.330] [INFO ] [backend.services.scanner] [SCAN] 尝试自动启动USN Journal监控...
-[2026-03-09 21:21:47.330] [INFO ] [backend.services.scanner] [SCAN] USN启动前权限检查: is_admin=True
-[2026-03-09 21:21:47.331] [INFO ] [backend.services.usn_monitor] [USN] === 监控启动 === 卷: E: (volume_root=E:\)
-[2026-03-09 21:21:47.331] [INFO ] [backend.services.scanner] [SCAN] USN监控自动启动结果: started=['E:'], already_running=[]
-[2026-03-09 21:21:47.331] [INFO ] [backend.services.usn_monitor] [USN] 监控路径: scan_roots=['E:\\']
-[2026-03-09 21:21:47.334] [INFO ] [backend.services.usn_monitor] [USN] 轮询间隔: 2.0s, 缓冲区: 65536字节
-[2026-03-09 21:21:47.334] [INFO ] [backend.services.usn_monitor] [USN] 卷句柄打开成功: \\.\\E:
-[2026-03-09 21:21:47.335] [INFO ] [backend.services.usn_monitor] [USN] Journal元数据: JournalID=0x1da394798862ce4, FirstUsn=947912704, NextUsn=988719424
-[2026-03-09 21:21:47.335] [INFO ] [backend.services.usn_monitor] [USN] 卷 E: 监控启动，JournalID=0x1da394798862ce4, StartUsn=988719424 (跳过历史，仅监听新变更)
-
+[2026-03-10 05:06:27.082] [INFO ] [logging_config] 日志系统初始化完成: file=E:\vibecoding\intell_file_system\logs\app.log
+[2026-03-10 05:06:27.282] [INFO ] [backend.main] ============================================================
+[2026-03-10 05:06:27.282] [INFO ] [backend.main] [STARTUP] ===== 系统启动 =====
+[2026-03-10 05:06:27.282] [INFO ] [backend.main] [STARTUP] Python版本: 3.11.14
+[2026-03-10 05:06:27.283] [INFO ] [backend.main] [STARTUP] 工作目录: E:\vibecoding\intell_file_system
+[2026-03-10 05:06:27.290] [INFO ] [backend.main] [STARTUP] 管理员权限: 是 ✓ (MFT扫描和USN监控可用)
+[2026-03-10 05:06:27.290] [INFO ] [backend.main] [STARTUP] 数据库路径: E:\vibecoding\intell_file_system\data\file_index.db (已存在, 大小: 179.64 MB)
+[2026-03-10 05:06:27.341] [INFO ] [backend.main] [STARTUP] [DB] 当前文件数: 161426, 大小为0的文件: 304 (正常)
+[2026-03-10 05:06:27.343] [INFO ] [backend.main] [STARTUP] ===== 启动完成，监听 http://127.0.0.1:8000 =====
+[2026-03-10 05:06:27.344] [INFO ] [backend.main] ============================================================
+[2026-03-10 05:06:33.284] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=idle method=scandir scanned=0 added=0
+[2026-03-10 05:06:36.388] [INFO ] [backend.routers.scan] [API] POST /scan/start: root_path=E:\, scan_type=full
+[2026-03-10 05:06:36.390] [INFO ] [backend.services.scanner] ==================================================
+[2026-03-10 05:06:36.390] [INFO ] [backend.routers.scan] [API] 扫描任务已提交: actual_type=full, root=E:\
+[2026-03-10 05:06:36.390] [INFO ] [backend.services.scanner] [SCAN] === 开始全量扫描 root=E:\ ===
+[2026-03-10 05:06:36.397] [INFO ] [backend.services.scanner] [SCAN] 权限检测: is_admin=True
+[2026-03-10 05:06:36.398] [INFO ] [backend.services.scanner] [SCAN] 扫描策略选择: MFT直读 (drive=E:)
+[2026-03-10 05:06:36.398] [INFO ] [backend.services.scanner] [SCAN] 确认扫描方法: mft
+[2026-03-10 05:06:36.628] [INFO ] [backend.services.scanner] [SCAN] [DB] MFT扫描前: 文件数=0
+[2026-03-10 05:06:36.629] [INFO ] [backend.services.mft_scanner] [MFT] 打开卷句柄: \\.\E: (drive_root=E:\)
+[2026-03-10 05:06:36.630] [INFO ] [backend.services.mft_scanner] [MFT] 卷参数: rec_size=1024 B, sector_size=512 B, MFT大小=204.8 MB
+[2026-03-10 05:06:36.630] [INFO ] [backend.services.mft_scanner] [MFT] 开始顺序读取 $MFT（偏移=3072.0 MB，大小=204.8 MB）...
+[2026-03-10 05:06:38.356] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
+[2026-03-10 05:06:39.354] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
+[2026-03-10 05:06:40.383] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
+[2026-03-10 05:06:40.429] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=0 added=0
+[2026-03-10 05:06:40.574] [INFO ] [backend.services.mft_scanner] [MFT] $MFT读取完成: 目录=37349, 文件=161447, .gdb=0, 耗时=3.95s
+[2026-03-10 05:06:40.594] [INFO ] [backend.services.mft_scanner] [MFT] 目录路径缓存: 成功=37348, 孤立=1, 耗时=0.02s
+[2026-03-10 05:06:41.127] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #1 写入: 19995条, 累计: 19995条
+[2026-03-10 05:06:41.401] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=19995 added=19995
+[2026-03-10 05:06:41.653] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #2 写入: 19999条, 累计: 39994条
+[2026-03-10 05:06:42.179] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #3 写入: 20000条, 累计: 59994条
+[2026-03-10 05:06:42.408] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=59994 added=59994
+[2026-03-10 05:06:42.709] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #4 写入: 20000条, 累计: 79994条
+[2026-03-10 05:06:43.237] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #5 写入: 20000条, 累计: 99994条
+[2026-03-10 05:06:43.404] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=99994 added=99994
+[2026-03-10 05:06:43.767] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #6 写入: 19999条, 累计: 119993条
+[2026-03-10 05:06:44.262] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #7 写入: 20000条, 累计: 139993条
+[2026-03-10 05:06:44.411] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=139993 added=139993
+[2026-03-10 05:06:44.798] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #8 写入: 19995条, 累计: 159988条
+[2026-03-10 05:06:44.848] [DEBUG] [backend.services.scanner] [SCAN] DB批次 #9 写入: 1446条, 累计: 161434条
+[2026-03-10 05:06:44.848] [INFO ] [backend.services.mft_scanner] [MFT] 路径解析: 成功=161447, 孤立失败=0 (0.0%)
+[2026-03-10 05:06:44.850] [INFO ] [backend.services.mft_scanner] [MFT] 总耗时=8.22s (MFT读取+解析=3.95s, 目录缓存=0.02s, 路径展开=4.25s)
+[2026-03-10 05:06:44.876] [INFO ] [backend.services.mft_scanner] [MFT] scan_volume完成: total=161447, elapsed=8.22s
+[2026-03-10 05:06:45.401] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=161434 added=161434
+[2026-03-10 05:06:45.785] [INFO ] [backend.services.scanner] [SCAN] 索引重建完成: 耗时=0.91s
+[2026-03-10 05:06:46.401] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=161434 added=161434
+[2026-03-10 05:06:46.587] [INFO ] [backend.services.scanner] [SCAN] 快照批量写入完成: 耗时=0.80s
+[2026-03-10 05:06:47.401] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=running method=mft scanned=161434 added=161434
+[2026-03-10 05:06:47.705] [INFO ] [backend.services.scanner] [SCAN] FTS5索引重建完成: 耗时=1.11s
+[2026-03-10 05:06:47.706] [INFO ] [backend.services.scanner] [SCAN] 后处理总耗时: 2.83s
+[2026-03-10 05:06:47.799] [INFO ] [backend.services.scanner] [SCAN] [DB] MFT扫描后: 文件数=161434, 大小为0的文件=304 (0.2%) (正常)
+[2026-03-10 05:06:47.799] [INFO ] [backend.services.scanner] [SCAN] === 全量扫描完成(MFT) 总写入=161434条 ===
+[2026-03-10 05:06:47.800] [INFO ] [backend.services.scanner] ==================================================
+[2026-03-10 05:06:48.401] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=completed method=mft scanned=161434 added=161434
+[2026-03-10 05:16:26.390] [DEBUG] [backend.routers.scan] [API] GET /scan/status: status=completed method=mft scanned=161434 added=161434

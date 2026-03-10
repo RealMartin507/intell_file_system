@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import get_config
 from backend.database import get_db
-from backend.models import MonitorStartRequest, ScanStartRequest
-from backend.services import scanner, usn_monitor
+from backend.models import ScanStartRequest
+from backend.services import scanner
 
 router = APIRouter(tags=["scan"])
 logger = logging.getLogger(__name__)
@@ -102,46 +102,3 @@ async def get_scan_logs(limit: int = Query(20, ge=1, le=100)):
     finally:
         conn.close()
 
-
-@router.post("/scan/monitor/start")
-async def start_monitor(body: MonitorStartRequest):
-    """
-    启动 NTFS USN Journal 实时监控。
-    - roots: 要监控的根路径列表，如 ["E:\\\\", "D:\\\\工作文件"]
-    - 每个路径提取卷符（E:）后启动独立监控线程
-    - 若该卷已在监控中，跳过（不重启）
-    - 需要以管理员权限运行服务（FSCTL_READ_USN_JOURNAL 需要 SeManageVolumePrivilege）
-    """
-    if not body.roots:
-        raise HTTPException(status_code=422, detail="roots 不能为空")
-    result = usn_monitor.start_monitoring(body.roots)
-    return {
-        "status": "ok",
-        "started_volumes": result["started"],
-        "already_running": result["already_running"],
-    }
-
-
-@router.post("/scan/monitor/stop")
-async def stop_monitor():
-    """
-    停止所有卷的 USN Journal 监控线程。
-    等待线程退出（最多 5 秒），返回已停止的卷列表。
-    """
-    result = usn_monitor.stop_monitoring()
-    return {"status": "ok", "stopped_volumes": result["stopped"]}
-
-
-@router.get("/scan/monitor/status")
-async def get_monitor_status():
-    """
-    返回 USN Journal 监控状态。
-    {
-        "running": bool,
-        "watching_volumes": [{"volume", "status", "events_processed",
-                              "upserted", "deleted", "skipped",
-                              "started_at", "restart_count", "last_error"}],
-        "events_processed": int
-    }
-    """
-    return usn_monitor.get_status()

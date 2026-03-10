@@ -24,7 +24,6 @@ import os
 import struct
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from backend.utils.file_types import SHAPEFILE_EXTENSIONS, get_file_type
@@ -362,7 +361,7 @@ def _build_dir_cache(
         for rec, name, parent in pending:
             parent_path = cache.get(parent)
             if parent_path is not None:
-                cache[rec] = os.path.join(parent_path, name)
+                cache[rec] = parent_path + os.sep + name
             else:
                 next_pending.append((rec, name, parent))
         if len(next_pending) == len(pending):
@@ -474,11 +473,13 @@ def _do_scan(
     )
 
     # ── 5. 构建并输出文件记录 ──────────────────────────────────────────────────
-    root_depth  = len(Path(drive_root).parts)
+    # drive_root 形如 "E:\\"，其 parts 数量为 1，用字符串分割代替 Path.parts 计数
+    root_depth  = drive_root.rstrip("\\").count("\\") + 1
     batch:      list[dict] = []
     total_count = 0
     path_ok     = 0
     path_fail   = 0
+    sep         = os.sep   # "\\" on Windows，缓存避免重复属性查找
 
     def _flush(records: list[dict]) -> None:
         nonlocal total_count
@@ -491,13 +492,19 @@ def _do_scan(
         if parent_path is None:
             path_fail += 1
             continue
-        path_ok  += 1
-        full_path = os.path.join(parent_path, name)
-        path_obj  = Path(full_path)
-        stem      = path_obj.stem
-        ext       = path_obj.suffix.lower()
-        depth     = len(path_obj.parts) - root_depth
-        sg        = str(path_obj.parent / stem) if ext in SHAPEFILE_EXTENSIONS else None
+        path_ok   += 1
+        full_path  = parent_path + sep + name
+        # 扩展名：从文件名找最后一个点
+        dot_idx    = name.rfind('.')
+        if dot_idx > 0:
+            ext  = name[dot_idx:].lower()
+            stem = name[:dot_idx]
+        else:
+            ext  = ""
+            stem = name
+        # 深度：full_path 的分隔符数量 - root 的分隔符数量
+        depth = full_path.count(sep) - root_depth + 1
+        sg    = parent_path + sep + stem if ext in SHAPEFILE_EXTENSIONS else None
 
         batch.append({
             "file_name":        name,
@@ -507,7 +514,7 @@ def _do_scan(
             "created_time":     ctime,
             "modified_time":    mtime,
             "file_path":        full_path,
-            "parent_dir":       str(path_obj.parent),
+            "parent_dir":       parent_path,
             "dir_depth":        depth,
             "file_type":        get_file_type(ext),
             "shapefile_group":  sg,
@@ -522,19 +529,20 @@ def _do_scan(
         parent_path = dir_cache.get(p_frn)
         if parent_path is None:
             continue
-        full_path = os.path.join(parent_path, name)
-        path_obj  = Path(full_path)
-        depth     = len(path_obj.parts) - root_depth
+        full_path  = parent_path + sep + name
+        dot_idx    = name.rfind('.')
+        stem       = name[:dot_idx] if dot_idx > 0 else name
+        depth      = full_path.count(sep) - root_depth + 1
 
         batch.append({
             "file_name":        name,
-            "file_name_no_ext": path_obj.stem,
+            "file_name_no_ext": stem,
             "extension":        ".gdb",
             "file_size":        0,
             "created_time":     ctime,
             "modified_time":    mtime,
             "file_path":        full_path,
-            "parent_dir":       str(path_obj.parent),
+            "parent_dir":       parent_path,
             "dir_depth":        depth,
             "file_type":        "gis_vector",
             "shapefile_group":  None,

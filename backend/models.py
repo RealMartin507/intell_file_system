@@ -43,6 +43,3 @@ class ScanStartRequest(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     config: dict
 
-
-class MonitorStartRequest(BaseModel):
-    roots: list[str]
