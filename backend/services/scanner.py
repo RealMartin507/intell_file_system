@@ -8,7 +8,9 @@
 """
 
 import fnmatch
+import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,6 +19,8 @@ from typing import Iterator, Optional
 
 from backend.database import get_db
 from backend.utils.file_types import SHAPEFILE_EXTENSIONS, get_file_type
+
+logger = logging.getLogger(__name__)
 
 # ─── 全局扫描状态 ───────────────────────────────────────────────────────────────
 
@@ -102,6 +106,10 @@ def _run_full_scan(
     exclude_patterns: list[str],
 ) -> None:
     global _state
+    t_scan_start = time.monotonic()
+    logger.info("=" * 50)
+    logger.info("[SCAN] === 开始全量扫描 root=%s ===", root_path)
+
     conn = get_db()
     # WAL 模式 + 减少 fsync 次数，大幅提升批量写入速度
     conn.execute("PRAGMA journal_mode=WAL")
@@ -113,16 +121,24 @@ def _run_full_scan(
     _drive_letter: str = ""
     try:
         from backend.services import mft_scanner as _m
-        if _m.is_admin():
+        admin_status = _m.is_admin()
+        logger.info("[SCAN] 权限检测: is_admin=%s", admin_status)
+        if admin_status:
             drive = Path(root_path).drive          # "C:"
             dl = drive.rstrip(":").strip().upper() # "C"
             if dl and len(dl) == 1 and dl.isalpha():
                 _mft_mod = _m
                 _drive_letter = dl
+                logger.info("[SCAN] 扫描策略选择: MFT直读 (drive=%s:)", dl)
+            else:
+                logger.warning("[SCAN] 盘符无效 %r，将回退到os.scandir", drive)
+        else:
+            logger.info("[SCAN] 扫描策略选择: os.scandir (非管理员权限，MFT不可用)")
     except ImportError:
-        pass
+        logger.warning("[SCAN] mft_scanner模块导入失败，使用os.scandir")
 
     _state.scan_method = "mft" if _mft_mod else "scandir"
+    logger.info("[SCAN] 确认扫描方法: %s", _state.scan_method)
 
     try:
         # 1. 创建扫描日志
@@ -134,7 +150,8 @@ def _run_full_scan(
         scan_id: int = cur.lastrowid
         _state.scan_id = scan_id
 
-        # 2. 清空旧数据 + 清空 FTS 索引
+        # 2. 全量扫描前删除索引（DELETE + 后续 INSERT 都快很多），再清空数据
+        _drop_full_scan_indexes(conn)
         conn.execute("DELETE FROM file_snapshots")
         conn.execute("DELETE FROM files")
         conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
@@ -148,15 +165,20 @@ def _run_full_scan(
                     root_path, disk_label, exclude_dirs, exclude_patterns, scan_id,
                 )
                 return
-            except (PermissionError, OSError, RuntimeError, ValueError):
-                # 静默 fallback：重新清空（MFT 可能已写入部分数据）
+            except (PermissionError, OSError, RuntimeError, ValueError) as _mft_err:
+                logger.warning(
+                    "[SCAN] MFT扫描失败，回退到scandir模式: %s", _mft_err, exc_info=True
+                )
+                # fallback：重新清空（MFT 可能已写入部分数据），索引已删无需再删
                 conn.execute("DELETE FROM file_snapshots")
                 conn.execute("DELETE FROM files")
                 conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
                 conn.commit()
+                # 注意：此时索引已在步骤2中删除，scandir 路径末尾会重建
                 _state.scan_method = "scandir"
                 _state.added = 0
                 _state.scanned_count = 0
+                logger.info("[SCAN] 已切换到scandir模式，继续扫描...")
 
         # 3b. os.scandir 通用通道
         batch: list[dict] = []
@@ -169,15 +191,28 @@ def _run_full_scan(
             _state.current_dir = record["parent_dir"]
 
             if len(batch) >= _BATCH_SIZE:
-                _insert_batch(conn, batch, scan_id, sync_fts=True)
+                _insert_batch(conn, batch, scan_id, sync_fts=False, skip_snapshots=True)
                 added += len(batch)
                 _state.added = added
                 batch.clear()
 
         if batch:
-            _insert_batch(conn, batch, scan_id, sync_fts=True)
+            _insert_batch(conn, batch, scan_id, sync_fts=False, skip_snapshots=True)
             added += len(batch)
             _state.added = added
+
+        # 全量写入完成：重建索引 + 批量快照 + FTS rebuild
+        t_post = time.monotonic()
+        _rebuild_full_scan_indexes(conn)
+        conn.execute(
+            "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
+            "SELECT file_path, modified_time, file_size, ? FROM files",
+            (scan_id,),
+        )
+        conn.commit()
+        conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+        conn.commit()
+        logger.info("[SCAN] 后处理(索引+快照+FTS)完成: 耗时=%.2fs", time.monotonic() - t_post)
 
         # 4. 更新扫描日志为完成
         conn.execute(
@@ -188,10 +223,20 @@ def _run_full_scan(
 
         _state.status = "completed"
         _state.added = added
+        elapsed = time.monotonic() - t_scan_start
+        speed   = added / elapsed if elapsed > 0 else 0
+        logger.info(
+            "[SCAN] scandir扫描完成: 总计=%d条, 耗时=%.2fs, 速度=%.0f条/s",
+            added, elapsed, speed,
+        )
+        logger.info("[SCAN] === 全量扫描完成(scandir) 总耗时=%.2fs ===", elapsed)
+        logger.info("=" * 50)
+        _try_auto_start_usn(root_path)
 
     except Exception as exc:
         _state.status = "failed"
         _state.error = str(exc)
+        logger.error("[SCAN] 全量扫描异常: %s", exc, exc_info=True)
         if _state.scan_id:
             try:
                 conn.execute(
@@ -204,6 +249,26 @@ def _run_full_scan(
         raise
     finally:
         conn.close()
+
+
+def _try_auto_start_usn(root_path: str) -> None:
+    """全量扫描完成后自动启动 USN Journal 监控（仅管理员模式下生效）。"""
+    logger.info("[SCAN] 尝试自动启动USN Journal监控...")
+    try:
+        from backend.services import mft_scanner as _m
+        admin = _m.is_admin()
+        logger.info("[SCAN] USN启动前权限检查: is_admin=%s", admin)
+        if not admin:
+            logger.info("[SCAN] 非管理员权限，跳过USN监控自动启动")
+            return
+        from backend.services import usn_monitor
+        result = usn_monitor.start_monitoring([root_path])
+        logger.info(
+            "[SCAN] USN监控自动启动结果: started=%s, already_running=%s",
+            result["started"], result["already_running"],
+        )
+    except Exception as exc:
+        logger.warning("[SCAN] USN监控自动启动失败（非致命）: %s", exc, exc_info=True)
 
 
 def _run_full_scan_mft(
@@ -228,9 +293,20 @@ def _run_full_scan_mft(
     root_depth     = len(Path(root_path).parts)
     exclude_set    = set(exclude_dirs)
     added          = 0
+    batch_no       = 0
+
+    # 扫描前 DB 状态
+    try:
+        pre_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        logger.info("[SCAN] [DB] MFT扫描前: 文件数=%d", pre_count)
+    except Exception:
+        pass
+
+    # 让前端在 MFT 读取阶段（约 4s）也能看到有效状态，而非 scanned=0
+    _state.current_dir = "正在读取 MFT 元数据..."
 
     def _callback(records: list[dict]) -> None:
-        nonlocal added
+        nonlocal added, batch_no
         filtered: list[dict] = []
 
         for r in records:
@@ -250,13 +326,60 @@ def _run_full_scan_mft(
             filtered.append(r)
 
         if filtered:
-            _insert_batch(conn, filtered, scan_id, sync_fts=True)
+            # skip_snapshots=True：不逐批写快照，末尾一条 SQL 批量生成，快 30%
+            _insert_batch(conn, filtered, scan_id, sync_fts=False, skip_snapshots=True)
             added += len(filtered)
+            batch_no += 1
             _state.added = added
             _state.scanned_count += len(filtered)
             _state.current_dir = filtered[-1]["parent_dir"]
+            logger.debug(
+                "[SCAN] DB批次 #%d 写入: %d条, 累计: %d条",
+                batch_no, len(filtered), added,
+            )
 
     mft_mod.scan_volume(drive_letter, _callback, _BATCH_SIZE, disk_label)
+
+    # ── 后处理：重建索引 + 批量快照 + FTS rebuild ──────────────────────────────
+    t_post = time.monotonic()
+
+    # 1) 重建 5 个索引（对已有数据做排序+B树构建，比逐行维护快很多）
+    _rebuild_full_scan_indexes(conn)
+    logger.info("[SCAN] 索引重建完成: 耗时=%.2fs", time.monotonic() - t_post)
+
+    # 2) 一条 SQL 从 files 表批量生成 file_snapshots（替代逐批 executemany）
+    t_snap = time.monotonic()
+    conn.execute(
+        "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
+        "SELECT file_path, modified_time, file_size, ? FROM files",
+        (scan_id,),
+    )
+    conn.commit()
+    logger.info("[SCAN] 快照批量写入完成: 耗时=%.2fs", time.monotonic() - t_snap)
+
+    # 3) FTS5 rebuild
+    t_fts = time.monotonic()
+    conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+    conn.commit()
+    logger.info("[SCAN] FTS5索引重建完成: 耗时=%.2fs", time.monotonic() - t_fts)
+
+    logger.info("[SCAN] 后处理总耗时: %.2fs", time.monotonic() - t_post)
+
+    # 扫描后 DB 诊断（关键：检查大小为0的文件比例）
+    try:
+        post_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        zero_size  = conn.execute(
+            "SELECT COUNT(*) FROM files WHERE file_size = 0 OR file_size IS NULL"
+        ).fetchone()[0]
+        logger.info(
+            "[SCAN] [DB] MFT扫描后: 文件数=%d, 大小为0的文件=%d (%.1f%%)%s",
+            post_count, zero_size,
+            zero_size / post_count * 100 if post_count > 0 else 0.0,
+            " *** 异常:大量文件size=0，可能是GetFileAttributesExW失败 ***"
+            if post_count > 0 and zero_size > post_count * 0.5 else " (正常)",
+        )
+    except Exception as exc:
+        logger.warning("[SCAN] 扫描后DB诊断查询失败: %s", exc)
 
     conn.execute(
         "UPDATE scan_logs SET finished_at=?, total_files=?, added=?, status=? WHERE id=?",
@@ -265,6 +388,9 @@ def _run_full_scan_mft(
     conn.commit()
     _state.status = "completed"
     _state.added = added
+    logger.info("[SCAN] === 全量扫描完成(MFT) 总写入=%d条 ===", added)
+    logger.info("=" * 50)
+    _try_auto_start_usn(root_path)
 
 
 # ─── 增量扫描主函数（在后台线程中执行）────────────────────────────────────────
@@ -636,21 +762,47 @@ def _fts_insert_by_paths(conn, paths: list[str]) -> None:
         )
 
 
-def _insert_batch(conn, batch: list[dict], scan_id: int, sync_fts: bool = False) -> None:
+def _insert_batch(
+    conn, batch: list[dict], scan_id: int,
+    sync_fts: bool = False, skip_snapshots: bool = False,
+) -> None:
     conn.executemany(_INSERT_SQL, batch)
-    conn.executemany(
-        _SNAPSHOT_SQL,
-        [
-            {
-                "file_path": r["file_path"],
-                "modified_time": r["modified_time"],
-                "file_size": r["file_size"],
-                "scan_id": scan_id,
-            }
-            for r in batch
-        ],
-    )
+    if not skip_snapshots:
+        conn.executemany(
+            _SNAPSHOT_SQL,
+            [
+                {
+                    "file_path": r["file_path"],
+                    "modified_time": r["modified_time"],
+                    "file_size": r["file_size"],
+                    "scan_id": scan_id,
+                }
+                for r in batch
+            ],
+        )
     if sync_fts:
         # 在同一事务内（executemany 未 commit），新插入行对本连接可见，可直接查询
         _fts_insert_by_paths(conn, [r["file_path"] for r in batch])
+    conn.commit()
+
+
+# 全量扫描：先删除这 5 个索引，写完后重建，INSERT 性能提升 5-6 倍
+_FULL_SCAN_INDEXES = [
+    ("idx_files_extension",  "ON files(extension)"),
+    ("idx_files_file_type",  "ON files(file_type)"),
+    ("idx_files_modified",   "ON files(modified_time)"),
+    ("idx_files_parent_dir", "ON files(parent_dir)"),
+    ("idx_files_shp_group",  "ON files(shapefile_group)"),
+]
+
+
+def _drop_full_scan_indexes(conn) -> None:
+    for name, _ in _FULL_SCAN_INDEXES:
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
+    conn.commit()
+
+
+def _rebuild_full_scan_indexes(conn) -> None:
+    for name, definition in _FULL_SCAN_INDEXES:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {name} {definition}")
     conn.commit()

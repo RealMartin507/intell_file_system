@@ -375,9 +375,19 @@ async function _doPoll() {
 
 function _updateProgress(data) {
   // 后端字段：scanned_count（不是 files_found），current_dir（不是 current_path）
+  const isMft = data.scan_method === 'mft';
   _setText('scan-count',        `${_fmtNum(data.scanned_count)} 个文件`);
   _setText('scan-current-path', data.current_dir || '扫描中...');
   _setText('scan-status-label', '扫描进行中...');
+
+  // 扫描策略 badge
+  const badge = document.getElementById('scan-method-badge');
+  if (badge) {
+    badge.textContent = isMft ? '⚡ MFT 直读' : '📂 普通扫描';
+    badge.className = isMft
+      ? 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap'
+      : 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-600 whitespace-nowrap';
+  }
 }
 
 function _onScanComplete(data) {

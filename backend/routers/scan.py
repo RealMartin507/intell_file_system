@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import get_config
@@ -6,6 +8,7 @@ from backend.models import MonitorStartRequest, ScanStartRequest
 from backend.services import scanner, usn_monitor
 
 router = APIRouter(tags=["scan"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/scan/start")
@@ -17,6 +20,7 @@ async def start_scan(body: ScanStartRequest):
       增量扫描要求已存在快照；若快照不存在则自动回退到全量扫描。
     若已有扫描在运行，返回 409。
     """
+    logger.info("[API] POST /scan/start: root_path=%s, scan_type=%s", body.root_path, body.scan_type)
     cfg = get_config()
 
     # 从配置中查找该路径对应的磁盘标签
@@ -56,8 +60,10 @@ async def start_scan(body: ScanStartRequest):
         actual_type = "full"
 
     if not started:
+        logger.warning("[API] 扫描任务已在运行，拒绝新请求 (root=%s)", body.root_path)
         raise HTTPException(status_code=409, detail="扫描任务已在进行中，请等待完成后重试")
 
+    logger.info("[API] 扫描任务已提交: actual_type=%s, root=%s", actual_type, body.root_path)
     return {"status": "started", "root_path": body.root_path, "scan_type": actual_type}
 
 
@@ -65,6 +71,10 @@ async def start_scan(body: ScanStartRequest):
 async def get_scan_status():
     """返回当前扫描进度。"""
     state = scanner.get_state()
+    logger.debug(
+        "[API] GET /scan/status: status=%s method=%s scanned=%d added=%d",
+        state.status, state.scan_method, state.scanned_count, state.added,
+    )
     return {
         "status": state.status,
         "scan_id": state.scan_id,
@@ -76,6 +86,7 @@ async def get_scan_status():
         "current_dir": state.current_dir,
         "started_at": state.started_at,
         "error": state.error,
+        "scan_method": state.scan_method,
     }
 
 

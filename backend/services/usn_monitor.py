@@ -15,6 +15,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import fnmatch
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -32,8 +33,11 @@ logger = logging.getLogger(__name__)
 # Windows 常量
 # ─────────────────────────────────────────────────────────────────────────────
 
-FSCTL_QUERY_USN_JOURNAL = 0x000900F4
-FSCTL_READ_USN_JOURNAL  = 0x000900BB
+FSCTL_QUERY_USN_JOURNAL  = 0x000900F4
+FSCTL_READ_USN_JOURNAL   = 0x000900BB
+FSCTL_CREATE_USN_JOURNAL = 0x000900E7  # 创建/激活 USN Journal（未启用时需要）
+
+ERROR_INVALID_FUNCTION   = 1           # USN Journal 未启用时 QUERY 会返回此错误
 
 # USN Reason 标志位
 USN_REASON_DATA_OVERWRITE  = 0x00000001
@@ -64,6 +68,8 @@ _MODIFY_REASONS = (
 )
 
 # CreateFile / 句柄相关常量
+GENERIC_READ                 = 0x80000000
+GENERIC_WRITE                = 0x40000000
 FILE_SHARE_READ              = 0x00000001
 FILE_SHARE_WRITE             = 0x00000002
 FILE_SHARE_DELETE            = 0x00000004
@@ -101,6 +107,14 @@ class USN_JOURNAL_DATA(ctypes.Structure):
         ("MaxUsn",          ctypes.c_int64),
         ("MaximumSize",     ctypes.c_uint64),
         ("AllocationDelta", ctypes.c_uint64),
+    ]
+
+
+class CREATE_USN_JOURNAL_DATA(ctypes.Structure):
+    """FSCTL_CREATE_USN_JOURNAL 输入（最大日志大小 + 分配粒度）。"""
+    _fields_ = [
+        ("MaximumSize",     ctypes.c_uint64),  # 日志最大字节数
+        ("AllocationDelta", ctypes.c_uint64),  # 每次分配增量
     ]
 
 
@@ -189,6 +203,15 @@ class MonitorState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+# 关键：64 位 Windows 上 HANDLE 是 64 位指针，必须声明 restype，
+# 否则 ctypes 默认返回 c_int（32位），句柄被截断导致后续 API 全部失败
+_kernel32.CreateFileW.restype             = wintypes.HANDLE
+_kernel32.OpenFileById.restype            = wintypes.HANDLE
+_kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+_kernel32.DeviceIoControl.restype         = wintypes.BOOL
+_kernel32.CloseHandle.restype             = wintypes.BOOL
+
 _INVALID_HANDLE = wintypes.HANDLE(-1).value
 
 
@@ -200,7 +223,7 @@ def _open_volume(volume_path: str) -> int:
     """
     handle = _kernel32.CreateFileW(
         volume_path,
-        0,  # dwDesiredAccess=0（仅用于 IOCTL，无需读写权限）
+        GENERIC_READ | GENERIC_WRITE,  # FSCTL_CREATE_USN_JOURNAL 需要 WRITE 权限
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         None,
         OPEN_EXISTING,
@@ -237,6 +260,9 @@ def _frn_to_path(vol_handle: int, frn: int) -> Optional[str]:
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
     )
     if file_handle == _INVALID_HANDLE:
+        _err = ctypes.get_last_error()
+        if _err not in (2, 3, 5, 32, 1168):  # 忽略常见的"文件不存在/访问拒绝"
+            logger.debug("[USN] OpenFileById frn=%d 失败，错误码 %d", frn, _err)
         return None
 
     try:
@@ -493,6 +519,10 @@ def _process_events(
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
 
+    batch_upsert = 0
+    batch_delete = 0
+    batch_skip   = 0
+
     try:
         for evt in events:
             is_dir = bool(evt.file_attributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -513,9 +543,22 @@ def _process_events(
 
             # 3. 路径解析
             if action == "upsert":
-                path = _frn_to_path(vol_handle, evt.frn)
+                # 优先用父目录 FRN + 文件名构造路径（父目录通常可解析），
+                # 再 os.path.exists() 确认文件实际存在；
+                # 若父目录 FRN 也无法解析才退回到文件自身 FRN（兼容旧逻辑）。
+                path = _deleted_path_from_parent(vol_handle, evt.parent_frn, evt.filename)
+                if path is not None and not os.path.exists(path):
+                    path = None  # 路径存在但文件不在（竞态），跳过
                 if path is None:
+                    # 兜底：尝试解析文件自身 FRN（可能失败）
+                    path = _frn_to_path(vol_handle, evt.frn)
+                if path is None:
+                    logger.debug(
+                        "[USN] 路径解析失败(upsert): filename=%s reason=%#x",
+                        evt.filename, evt.reason,
+                    )
                     state.skipped += 1
+                    batch_skip += 1
                     continue
             else:  # delete
                 path = _deleted_path_from_parent(vol_handle, evt.parent_frn, evt.filename)
@@ -527,7 +570,12 @@ def _process_events(
                     finally:
                         tmp.close()
                 if path is None:
+                    logger.debug(
+                        "[USN] 路径解析失败(delete): filename=%s reason=%#x",
+                        evt.filename, evt.reason,
+                    )
                     state.skipped += 1
+                    batch_skip += 1
                     continue
 
             # 4. 仅处理 scan_roots 下的路径
@@ -546,14 +594,31 @@ def _process_events(
             if action == "upsert":
                 if _db_upsert(conn, path, disk_label, volume_root):
                     state.upserted += 1
+                    batch_upsert += 1
+                    logger.info(
+                        "[USN] DB写入(upsert): %s (reason=%#x)", path, evt.reason
+                    )
                 else:
                     state.skipped += 1
+                    batch_skip += 1
             else:
                 if _db_delete(conn, path):
                     state.deleted += 1
+                    batch_delete += 1
+                    logger.info(
+                        "[USN] DB写入(delete): %s (reason=%#x)", path, evt.reason
+                    )
 
         conn.commit()
         state.events_processed += len(events)
+
+        if batch_upsert + batch_delete > 0:
+            logger.info(
+                "[USN] 批次处理完成: 事件=%d, upsert=%d, delete=%d, skip=%d, "
+                "累计(upserted=%d deleted=%d skipped=%d)",
+                len(events), batch_upsert, batch_delete, batch_skip,
+                state.upserted, state.deleted, state.skipped,
+            )
 
     except Exception as exc:
         logger.error("[USN] 事件处理异常：%s", exc, exc_info=True)
@@ -586,11 +651,24 @@ def _monitor_volume_loop(
     - Timeout=0, BytesToWaitFor=0：非阻塞轮询，配合 stop_event 可干净退出
     """
     vol_path   = r"\\.\\" + volume   # r"\\.\E:"
-    vol_handle = _open_volume(vol_path)  # 可能抛 PermissionError / OSError
+    logger.info("[USN] === 监控启动 === 卷: %s (volume_root=%s)", volume, volume_root)
+    logger.info("[USN] 监控路径: scan_roots=%s", scan_roots)
+    logger.info("[USN] 轮询间隔: %.1fs, 缓冲区: %d字节", _POLL_INTERVAL, _READ_BUF_SIZE)
 
     try:
-        # 查询 USN Journal 元数据
-        journal_data  = USN_JOURNAL_DATA()
+        vol_handle = _open_volume(vol_path)
+    except PermissionError as exc:
+        logger.error("[USN] 卷句柄打开失败（权限不足，需要管理员权限）: %s", exc)
+        raise
+    except OSError as exc:
+        logger.error("[USN] 卷句柄打开失败（OS错误）: %s", exc)
+        raise
+
+    logger.info("[USN] 卷句柄打开成功: %s", vol_path)
+
+    try:
+        # 查询 USN Journal 元数据（首次失败时尝试自动创建 Journal）
+        journal_data   = USN_JOURNAL_DATA()
         bytes_returned = ctypes.c_uint32(0)
 
         ok = _kernel32.DeviceIoControl(
@@ -605,19 +683,65 @@ def _monitor_volume_loop(
         if not ok:
             err = ctypes.get_last_error()
             if err == ERROR_ACCESS_DENIED:
+                logger.error("[USN] FSCTL_QUERY_USN_JOURNAL 失败: 需要管理员权限 (错误码=%d)", err)
                 raise PermissionError(
                     f"FSCTL_QUERY_USN_JOURNAL 失败：需要管理员权限（错误码 {err}）"
                 )
-            raise OSError(f"FSCTL_QUERY_USN_JOURNAL 失败，错误码 {err}")
+            if err == ERROR_INVALID_FUNCTION:
+                # USN Journal 未启用，尝试自动创建（32MB 最大，4MB 分配粒度）
+                logger.info("[USN] 卷 %s USN Journal 未启用，尝试自动创建...", volume)
+                create_data = CREATE_USN_JOURNAL_DATA(
+                    MaximumSize     = 32 * 1024 * 1024,
+                    AllocationDelta =  4 * 1024 * 1024,
+                )
+                ok_create = _kernel32.DeviceIoControl(
+                    vol_handle,
+                    FSCTL_CREATE_USN_JOURNAL,
+                    ctypes.byref(create_data),
+                    ctypes.sizeof(create_data),
+                    None, 0,
+                    ctypes.byref(bytes_returned),
+                    None,
+                )
+                if not ok_create:
+                    create_err = ctypes.get_last_error()
+                    logger.error("[USN] USN Journal创建失败: 错误码=%d", create_err)
+                    raise OSError(
+                        f"无法创建 USN Journal（错误码 {create_err}）。"
+                        "请确认卷为 NTFS 格式且以管理员权限运行。"
+                    )
+                # 创建成功，重新查询
+                ok2 = _kernel32.DeviceIoControl(
+                    vol_handle,
+                    FSCTL_QUERY_USN_JOURNAL,
+                    None, 0,
+                    ctypes.byref(journal_data),
+                    ctypes.sizeof(journal_data),
+                    ctypes.byref(bytes_returned),
+                    None,
+                )
+                if not ok2:
+                    raise OSError(
+                        f"FSCTL_QUERY_USN_JOURNAL 失败（创建后仍失败，错误码 {ctypes.get_last_error()}）"
+                    )
+                logger.info("[USN] 卷 %s USN Journal 已成功创建并激活", volume)
+            else:
+                logger.error("[USN] FSCTL_QUERY_USN_JOURNAL 失败: 错误码=%d", err)
+                raise OSError(f"FSCTL_QUERY_USN_JOURNAL 失败，错误码 {err}")
 
         current_usn = journal_data.NextUsn      # 从当前末尾开始，跳过历史
         journal_id  = journal_data.UsnJournalID
         logger.info(
-            "[USN] 卷 %s 监控启动，JournalID=%#x, StartUsn=%d",
+            "[USN] Journal元数据: JournalID=%#x, FirstUsn=%d, NextUsn=%d",
+            journal_id, journal_data.FirstUsn, current_usn,
+        )
+        logger.info(
+            "[USN] 卷 %s 监控启动，JournalID=%#x, StartUsn=%d (跳过历史，仅监听新变更)",
             volume, journal_id, current_usn,
         )
+        logger.info("[USN] === 监控就绪，等待文件变更事件 ===")
 
-        buf = (ctypes.c_byte * _READ_BUF_SIZE)()
+        buf = (ctypes.c_ubyte * _READ_BUF_SIZE)()
 
         while not stop_event.is_set():
             read_data = READ_USN_JOURNAL_DATA()
