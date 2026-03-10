@@ -12,11 +12,11 @@
 
 ## 技术栈
 
-| 层次 | 技术 |
-|------|------|
-| 后端 | Python 3.11 · FastAPI · uvicorn |
-| 数据库 | SQLite（WAL + FTS5） |
-| 前端 | Vanilla JS · Tailwind CSS · Lucide Icons |
+| 层次     | 技术                                            |
+| -------- | ----------------------------------------------- |
+| 后端     | Python 3.11 · FastAPI · uvicorn                 |
+| 数据库   | SQLite（WAL + FTS5）                            |
+| 前端     | Vanilla JS · Tailwind CSS · Lucide Icons        |
 | MFT 扫描 | ctypes + `DeviceIoControl(FSCTL_ENUM_USN_DATA)` |
 
 ## 快速开始
@@ -30,11 +30,13 @@
 ### 启动服务
 
 **普通模式**（os.scandir 扫描）：
+
 ```
 双击 start.bat
 ```
 
 **管理员模式**（NTFS MFT 直读，扫描更快）：
+
 ```
 右键 start.bat → 以管理员身份运行
 ```
@@ -56,10 +58,10 @@ taskkill /F /PID <pid>
 
 ## 扫描模式说明
 
-| 模式 | 触发条件 | 速度 |
-|------|---------|------|
-| MFT 直读 | 以管理员身份运行 + NTFS 卷 | 快（2~5×） |
-| os.scandir | 非管理员 / 非 NTFS / MFT 失败 | 标准 |
+| 模式       | 触发条件                      | 速度       |
+| ---------- | ----------------------------- | ---------- |
+| MFT 直读   | 以管理员身份运行 + NTFS 卷    | 快（2~5×） |
+| os.scandir | 非管理员 / 非 NTFS / MFT 失败 | 标准       |
 
 增量扫描通过 mtime + size 快照对比，仅处理变更文件，日常使用首选增量模式。
 当前使用的扫描方式可通过 `GET /api/scan/status` 的 `scan_method` 字段查看。
@@ -109,9 +111,9 @@ intell_file_system/
 │   └── js/
 │       ├── app.js            # ✅ 全局应用逻辑（视图切换、通知、状态检测）
 │       ├── settings.js       # ✅ 设置页面（扫描路径、排除规则、自动扫描）
-│       ├── dashboard.js      # 📋 待完成：统计卡片、扫描进度、分布饼图
-│       ├── search.js         # 📋 待完成：搜索交互、结果列表、文件操作
-│       └── preview.js        # 📋 待完成：预览模态框、缩略图显示
+│       ├── dashboard.js      # ✅ 统计卡片、扫描进度、分布饼图
+│       ├── search.js         # ✅ 搜索交互、结果列表、文件操作
+│       └── preview.js        # ✅ 预览模态框、缩略图显示
 ├── data/                     # SQLite 数据库 + 缩略图缓存（git 忽略）
 ├── config.json               # 用户配置（扫描路径、排除规则）
 └── start.bat                 # 一键启动脚本
@@ -126,9 +128,9 @@ intell_file_system/
 
 ## 性能指标
 
-| 场景 | 扫描方式 | 文件数 | 耗时 | 速率 |
-|------|---------|--------|------|------|
-| 标准扫描 | os.scandir | 163,981 | 9.44s | 17,371 files/s |
-| MFT 直读 | NTFS MFT | ~35万+ | ~5-15s（估计） | 23,000-70,000 files/s |
+| 场景     | 扫描方式   | 文件数  | 耗时           | 速率                  |
+| -------- | ---------- | ------- | -------------- | --------------------- |
+| 标准扫描 | os.scandir | 163,981 | 9.44s          | 17,371 files/s        |
+| MFT 直读 | NTFS MFT   | ~35万+  | ~5-15s（估计） | 23,000-70,000 files/s |
 
 注：MFT 扫描需以管理员权限运行，速度相比 os.scandir 快 2~5 倍。
