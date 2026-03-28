@@ -101,6 +101,18 @@ h1, h2, h3 {
   outline-offset: 2px;
 }
 
+/* ---- 禁用搜索输入框的默认清除按钮 ---- */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+input[type="search"] {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
 /* ---- 导航项聚焦态 ---- */
 .nav-item:focus-visible {
   outline: 2px solid #3B82F6;
@@ -109,3 +121,9 @@ h1, h2, h3 {
 
 /* ---- AI 视图消息区滚动条更细 ---- */
 #ai-messages-container::-webkit-scrollbar { width: 4px; }
+
+/* ---- CLI 扫描终端滚动条 ---- */
+#scan-terminal::-webkit-scrollbar { width: 5px; }
+#scan-terminal::-webkit-scrollbar-track { background: transparent; }
+#scan-terminal::-webkit-scrollbar-thumb { background: #DDD8D0; border-radius: 3px; }
+#scan-terminal::-webkit-scrollbar-thumb:hover { background: #c8c2ba; }

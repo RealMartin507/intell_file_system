@@ -100,6 +100,13 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (scan_id) REFERENCES scan_logs(id)
         );
 
+        -- 目录快照表（用于增量扫描目录 mtime 剪枝）
+        CREATE TABLE IF NOT EXISTS dir_snapshots (
+            dir_path  TEXT PRIMARY KEY,
+            dir_mtime TEXT,
+            scan_id   INTEGER
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_files_extension  ON files(extension);
         CREATE INDEX IF NOT EXISTS idx_files_file_type  ON files(file_type);

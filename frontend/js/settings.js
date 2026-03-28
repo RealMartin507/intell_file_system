@@ -328,7 +328,7 @@ const Settings = {
   // 5. 模态框：添加项目
   // ──────────────────────────────────────────────────────────────
 
-  showAddScanRootModal() {
+  async showAddScanRootModal() {
     const path = prompt('输入扫描根目录路径（例如：E:\\）');
     if (path && path.trim()) {
       const diskLabel = prompt('输入磁盘标签（可选，如：工作数据盘）') || '';
@@ -346,9 +346,8 @@ const Settings = {
           disk_label: diskLabel.trim(),
           disk_serial: '',
         });
-        this.hasChanges = true;
         this.renderUI();
-        App.showToast('已添加扫描路径', 'success');
+        await this._saveScanRoots();
       } else {
         App.showToast('路径已存在', 'warning');
       }
@@ -389,12 +388,11 @@ const Settings = {
   // 6. 删除项目
   // ──────────────────────────────────────────────────────────────
 
-  removeScanRoot(index) {
+  async removeScanRoot(index) {
     if (confirm('确定删除此扫描路径吗？')) {
       this.currentConfig.scan_roots.splice(index, 1);
-      this.hasChanges = true;
       this.renderUI();
-      App.showToast('已删除扫描路径', 'success');
+      await this._saveScanRoots();
     }
   },
 
@@ -441,6 +439,25 @@ const Settings = {
   // ──────────────────────────────────────────────────────────────
   // 8. 保存设置
   // ──────────────────────────────────────────────────────────────
+
+  // 扫描路径变更后立即保存并通知仪表盘同步
+  async _saveScanRoots() {
+    try {
+      const resp = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.currentConfig),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      App.showToast('扫描路径已保存', 'success');
+      // 通知仪表盘同步输入框
+      document.dispatchEvent(new CustomEvent('app:configChanged', {
+        detail: { scan_roots: this.currentConfig.scan_roots }
+      }));
+    } catch (err) {
+      App.showToast('保存失败：' + err.message, 'error');
+    }
+  },
 
   async saveSettings() {
     // 更新自动扫描设置

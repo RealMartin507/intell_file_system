@@ -1,8 +1,8 @@
 {
     "scan_roots": [
         {
-            "path": "E:\\",
-            "disk_label": "工作数据盘",
+            "path": "D:\\",
+            "disk_label": "数据",
             "disk_serial": ""
         }
     ],

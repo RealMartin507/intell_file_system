@@ -8,6 +8,7 @@ POST /api/files/{id}/open      os.startfile() 打开文件
 POST /api/files/{id}/open-dir  explorer /select 定位文件
 """
 
+import ctypes
 import os
 import subprocess
 from pathlib import Path
@@ -164,14 +165,18 @@ async def open_file_dir(file_id: int):
         file_path = record["file_path"]
 
         if Path(file_path).exists():
-            # /select, 与路径之间不加空格
-            subprocess.Popen(f'explorer /select,"{file_path}"', shell=True)
+            # 用 ShellExecuteW 调用 Windows API，正确处理含中文/空格的路径
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "open", "explorer.exe", f'/select,"{file_path}"', None, 1
+            )
             return {"status": "ok", "file_path": file_path}
 
         # 文件不存在时尝试打开父目录
         parent = str(Path(file_path).parent)
         if Path(parent).exists():
-            subprocess.Popen(f'explorer "{parent}"', shell=True)
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "open", "explorer.exe", parent, None, 1
+            )
             return {
                 "status": "partial",
                 "message": "文件不存在，已打开所在目录",

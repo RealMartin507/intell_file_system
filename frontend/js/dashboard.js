@@ -30,6 +30,13 @@ let _typeData     = [];     // 当前类型分布数据
 let _scanTimer    = null;   // 轮询定时器
 let _isScanning   = false;
 
+// 终端相关
+let _terminalLines        = [];
+const _MAX_TERM_LINES     = 200;
+let _terminalUserScrolled = false;
+let _lastTermPhase        = '';
+let _lastTermDir          = '';
+
 // ──────────────────────────────────────────────
 // 初始化
 // ──────────────────────────────────────────────
@@ -37,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
   _initQuickSearch();
   _initScanControls();
   _loadDashboard();
+  _loadScanRootFromConfig();
 
   // 检查是否有扫描正在进行
   _pollOnce();
@@ -44,7 +52,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 切换到仪表盘时刷新
 document.addEventListener('app:viewChanged', (e) => {
-  if (e.detail.view === 'dashboard') _loadDashboard();
+  if (e.detail.view === 'dashboard') {
+    _loadDashboard();
+    _loadScanRootFromConfig();
+  }
+});
+
+// 设置页保存扫描路径后立即同步输入框
+document.addEventListener('app:configChanged', (e) => {
+  const roots = e.detail?.scan_roots || [];
+  if (roots.length === 0) return;
+  const first = roots[0];
+  const path = typeof first === 'string' ? first : (first.path || '');
+  const input = document.getElementById('scan-root-input');
+  if (input && path) input.value = path;
 });
 
 // ──────────────────────────────────────────────
@@ -84,21 +105,16 @@ async function _loadDashboard() {
 // KPI 渲染
 // ──────────────────────────────────────────────
 function _renderOverview(data) {
-  // 文件总数
   _setText('kpi-total', _fmtNum(data.total_files));
-  _setText('chart-center-num', _fmtNum(data.total_files));
 
-  // 上次扫描时间
   const lastScan = data.last_scan ? `上次扫描：${_fmtDate(data.last_scan)}` : '尚未扫描';
   _setText('kpi-last-scan', lastScan);
 
-  // 数据库大小
   _setText('kpi-db-size', data.db_size_mb != null ? `${data.db_size_mb.toFixed(1)} MB` : '--');
 }
 
 function _renderOverviewEmpty() {
   ['kpi-total', 'kpi-last-scan', 'kpi-db-size'].forEach(id => _setText(id, '--'));
-  _setText('chart-center-num', '--');
 }
 
 function _renderKpiSize(typesData) {
@@ -119,11 +135,11 @@ function _renderKpiChanges(log) {
   _setText('kpi-added',    _fmtNum(log.files_added    ?? log.added    ?? 0));
   _setText('kpi-deleted',  _fmtNum(log.files_deleted  ?? log.deleted  ?? 0));
   _setText('kpi-modified', _fmtNum(log.files_modified ?? log.modified ?? 0));
-  _setText('kpi-changes-time', log.start_time ? _fmtDate(log.start_time) : '--');
+  _setText('kpi-changes-time', _fmtDate(log.start_time ?? log.started_at));
 }
 
 // ──────────────────────────────────────────────
-// 文件类型分布图（Chart.js Donut）
+// 文件类型分布图（Chart.js 水平柱状图）
 // ──────────────────────────────────────────────
 function _renderTypeChart(typesData) {
   const dist = (typesData.distribution || [])
@@ -137,77 +153,75 @@ function _renderTypeChart(typesData) {
   document.getElementById('type-chart-wrap')?.classList.remove('hidden');
   document.getElementById('type-chart-empty')?.classList.add('hidden');
 
-  const labels  = dist.map(d => (FILE_TYPE_CFG[d.file_type] || { label: d.file_type }).label);
-  const counts  = dist.map(d => d.count);
-  const colors  = dist.map(d => (FILE_TYPE_CFG[d.file_type] || { color: '#57534E' }).color);
+  const labels = dist.map(d => (FILE_TYPE_CFG[d.file_type] || { label: d.file_type }).label);
+  const counts = dist.map(d => d.count);
+  const colors = dist.map(d => (FILE_TYPE_CFG[d.file_type] || { color: '#57534E' }).color);
 
   const canvas = document.getElementById('type-chart');
   if (!canvas) return;
 
   if (_typeChart) { _typeChart.destroy(); _typeChart = null; }
 
+  // 动态调整容器高度（每行 40px + 上下 padding）
+  const rowHeight = 40;
+  const newHeight = Math.max(200, dist.length * rowHeight + 40);
+  const wrap = document.getElementById('type-chart-wrap');
+  if (wrap) wrap.style.height = `${newHeight}px`;
+
   _typeChart = new Chart(canvas, {
-    type: 'doughnut',
+    type: 'bar',
     data: {
       labels,
       datasets: [{
         data: counts,
-        backgroundColor: colors,
-        borderWidth: 2,
-        borderColor: '#FFFFFF',
-        hoverBorderColor: '#FFFFFF',
-        hoverOffset: 4,
+        backgroundColor: colors.map(c => c + 'CC'),
+        borderColor: colors,
+        borderWidth: 1,
+        borderRadius: 4,
+        borderSkipped: false,
       }],
     },
     options: {
+      indexAxis: 'y',
       responsive: true,
-      maintainAspectRatio: true,
-      cutout: '68%',
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => ` ${ctx.label}：${ctx.parsed.toLocaleString()} 个`,
+            label: ctx => ` ${ctx.parsed.x.toLocaleString()} 个文件`,
           },
           backgroundColor: '#1C1917',
           padding: 10,
-          titleFont: { size: 12 },
-          bodyFont: { size: 12 },
+          bodyFont: { size: 12, family: 'monospace' },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(168,162,158,0.15)', drawTicks: false },
+          border: { dash: [4, 4] },
+          ticks: {
+            color: '#A8A29E',
+            font: { size: 11 },
+            callback: v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v,
+          },
+        },
+        y: {
+          grid: { display: false },
+          ticks: {
+            color: '#57534E',
+            font: { size: 12 },
+          },
         },
       },
       onClick: (_evt, elements) => {
         if (elements.length > 0) {
-          const idx = elements[0].index;
-          Dashboard.filterByType(_typeData[idx]?.file_type);
+          Dashboard.filterByType(_typeData[elements[0].index]?.file_type);
         }
       },
-      animation: { duration: 400 },
+      animation: { duration: 400, easing: 'easeOutQuart' },
     },
   });
-
-  _renderTypeLegend(dist);
-}
-
-function _renderTypeLegend(dist) {
-  const legend = document.getElementById('type-legend');
-  if (!legend) return;
-
-  const total = dist.reduce((s, d) => s + d.count, 0);
-  legend.innerHTML = dist.map(d => {
-    const cfg  = FILE_TYPE_CFG[d.file_type] || { label: d.file_type, color: '#57534E' };
-    const pct  = total > 0 ? ((d.count / total) * 100).toFixed(1) : '0.0';
-    return `
-      <button
-        onclick="Dashboard.filterByType('${d.file_type}')"
-        class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-stone-50 transition-colors duration-100 cursor-pointer text-left group"
-        title="点击筛选 ${cfg.label}"
-      >
-        <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color:${cfg.color}"></span>
-        <span class="flex-1 text-xs text-stone-600 group-hover:text-stone-900 truncate transition-colors">${cfg.label}</span>
-        <span class="text-xs font-mono text-stone-400 tabular-nums">${d.count.toLocaleString()}</span>
-        <span class="text-xs text-stone-300 w-10 text-right tabular-nums">${pct}%</span>
-      </button>`;
-  }).join('');
 }
 
 function _showTypeChartEmpty() {
@@ -232,7 +246,7 @@ function _renderScanLogs(logs) {
 
   if (!logs || logs.length === 0) { _renderScanLogsEmpty(); return; }
 
-  const recent = logs.slice(0, 5);
+  const recent = logs.slice(0, 8);
   tbody.innerHTML = recent.map(log => {
     const added    = log.files_added    ?? log.added    ?? 0;
     const deleted  = log.files_deleted  ?? log.deleted  ?? 0;
@@ -241,23 +255,39 @@ function _renderScanLogs(logs) {
     const typeLabel = _SCAN_TYPE_LABEL[log.scan_type] || log.scan_type;
     const badge    = _SCAN_STATUS_BADGE[log.status] || `<span class="text-xs text-stone-400">${log.status || '--'}</span>`;
 
+    const rootPath  = log.root_path || '--';
+    const shortPath = _shortenPath(rootPath, 45);
+
+    // 计算耗时
+    let elapsed = '';
+    if (log.started_at && log.finished_at) {
+      const sec = Math.round((new Date(log.finished_at) - new Date(log.started_at)) / 1000);
+      elapsed = sec >= 60 ? `${Math.floor(sec/60)}m${sec%60}s` : `${sec}s`;
+    }
+
     return `
       <tr class="hover:bg-stone-50 transition-colors duration-100">
-        <td class="py-3 pr-3 text-xs text-stone-500 whitespace-nowrap">${_fmtDate(log.start_time)}</td>
-        <td class="py-3 pr-3">
+        <td class="py-3 pr-3 text-xs text-stone-500 whitespace-nowrap">${_fmtDate(log.start_time ?? log.started_at)}</td>
+        <td class="py-3 pr-3 max-w-xs">
+          <span class="text-xs font-mono text-stone-600 truncate block" title="${rootPath}">${shortPath}</span>
+        </td>
+        <td class="py-3 pr-3 whitespace-nowrap">
           <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${log.scan_type === 'full' ? 'bg-blue-50 text-blue-700' : 'bg-stone-100 text-stone-600'}">
             ${typeLabel}
           </span>
         </td>
-        <td class="py-3 pr-3 text-center text-xs font-mono">${changes}</td>
-        <td class="py-3 text-right">${badge}</td>
+        <td class="py-3 pr-3 text-center text-xs font-mono whitespace-nowrap">${changes}</td>
+        <td class="py-3 text-right whitespace-nowrap">
+          ${badge}
+          ${elapsed ? `<div class="text-[10px] text-stone-400 mt-0.5">${elapsed}</div>` : ''}
+        </td>
       </tr>`;
   }).join('');
 }
 
 function _renderScanLogsEmpty() {
   const tbody = document.getElementById('scan-logs-body');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="py-8 text-center text-sm text-stone-400">暂无扫描记录</td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-sm text-stone-400">暂无扫描记录</td></tr>`;
 }
 
 // ──────────────────────────────────────────────
@@ -270,7 +300,6 @@ function _initQuickSearch() {
 
   const doSearch = () => {
     const q = input.value.trim();
-    // 通知 search 模块执行搜索
     document.dispatchEvent(new CustomEvent('app:searchRequested', { detail: { q, type: '' } }));
     App.switchView('search');
   };
@@ -291,19 +320,44 @@ function _initScanControls() {
     if (App.currentView === 'dashboard') {
       document.getElementById('btn-full-scan')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-    // app.js 会处理切换视图
   });
+
+  // 监听终端滚动，用户手动滚动时暂停自动滚到底部
+  const terminal = document.getElementById('scan-terminal');
+  if (terminal) {
+    terminal.addEventListener('scroll', () => {
+      const atBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 10;
+      _terminalUserScrolled = !atBottom;
+    });
+  }
+}
+
+async function _loadScanRootFromConfig() {
+  try {
+    const res = await fetch(`${App.API_BASE}/api/config`);
+    if (!res.ok) return;
+    const cfg = await res.json();
+    const roots = cfg.scan_roots || [];
+    if (roots.length === 0) return;
+    const first = roots[0];
+    const path = typeof first === 'string' ? first : (first.path || '');
+    const input = document.getElementById('scan-root-input');
+    if (input && path) input.value = path;
+  } catch { /* 加载失败静默忽略 */ }
 }
 
 async function _startScan(scanType) {
   if (_isScanning) return;
 
-  const rootPath = (document.getElementById('scan-root-input')?.value || 'E:\\').trim();
-  if (!rootPath) { App.showToast('请输入扫描根目录', 'warning'); return; }
+  const rootPath = (document.getElementById('scan-root-input')?.value || '').trim();
+  if (!rootPath) { App.showToast('请先在设置中添加扫描路径，或在输入框中填写路径', 'warning'); return; }
 
-  // ── 立即给用户视觉反馈（同步，不等网络）──
   _isScanning = true;
   _setScanningUI(true);
+
+  // 清空终端并写入启动消息
+  _termClear();
+  _termWrite(`启动${scanType === 'full' ? '全量' : '增量'}扫描：${rootPath}`, 'info');
 
   try {
     const res = await fetch(`${App.API_BASE}/api/scan/start`, {
@@ -314,21 +368,23 @@ async function _startScan(scanType) {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      // 恢复 UI
       _isScanning = false;
       _setScanningUI(false);
+      _termWrite(`启动失败：${err.detail || res.status}`, 'error');
       App.showToast(err.detail || `启动扫描失败（${res.status}）`, 'error');
       return;
     }
 
     const result = await res.json().catch(() => ({}));
     const actualType = (result.scan_type || scanType).includes('incremental') ? '增量' : '全量';
+    _termWrite(`${actualType}扫描任务已提交，开始监控进度...`, 'dim');
     App.showToast(`${actualType}扫描已启动`, 'success');
     _startPolling();
 
   } catch (e) {
     _isScanning = false;
     _setScanningUI(false);
+    _termWrite('无法连接后端服务，请确认服务已启动（端口 8000）', 'error');
     App.showToast('无法连接后端服务，请确认服务已启动（端口 8000）', 'error');
   }
 }
@@ -341,10 +397,10 @@ async function _pollOnce() {
     const res  = await fetch(`${App.API_BASE}/api/scan/status`);
     if (!res.ok) return;
     const data = await res.json();
-    // 后端返回 status 字段（'running' / 'idle' / 'completed' / 'error'）
     if (data.status === 'running') {
       _isScanning = true;
       _setScanningUI(true);
+      _termWrite('检测到扫描正在进行中，接管进度监控...', 'dim');
       _updateProgress(data);
       _startPolling();
     }
@@ -362,7 +418,6 @@ async function _doPoll() {
     if (!res.ok) { _onScanError(); return; }
     const data = await res.json();
 
-    // 后端用 status 字段（不是 is_running）
     if (data.status === 'running') {
       _updateProgress(data);
     } else {
@@ -374,38 +429,58 @@ async function _doPoll() {
 }
 
 function _updateProgress(data) {
-  // 后端字段：scanned_count（不是 files_found），current_dir（不是 current_path）
   const isMft = data.scan_method === 'mft';
-  _setText('scan-count',        `${_fmtNum(data.scanned_count)} 个文件`);
-  _setText('scan-current-path', data.current_dir || '扫描中...');
-  _setText('scan-status-label', '扫描进行中...');
 
-  // 扫描策略 badge
+  // 更新终端顶栏 badge
   const badge = document.getElementById('scan-method-badge');
   if (badge) {
     badge.textContent = isMft ? '⚡ MFT 直读' : '📂 普通扫描';
     badge.className = isMft
-      ? 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap'
-      : 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-600 whitespace-nowrap';
+      ? 'ml-auto px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-900/60 text-amber-400 whitespace-nowrap'
+      : 'ml-auto px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-900/60 text-blue-400 whitespace-nowrap';
   }
+
+  // 阶段变化时写入终端
+  const phase = data.current_phase || '';
+  if (phase && phase !== _lastTermPhase) {
+    _termWrite(`[阶段] ${phase}`, 'warn');
+    _lastTermPhase = phase;
+  }
+
+  // 当前目录变化时写入终端
+  const dir = data.current_dir || '';
+  if (dir && dir !== _lastTermDir) {
+    _termWrite(dir, 'path');
+    _lastTermDir = dir;
+  }
+
+  // 原地刷新文件计数行
+  _termUpdateCount(data.scanned_count, data.added, data.deleted, data.modified);
 }
 
 function _onScanComplete(data) {
   _stopPolling();
   _setScanningUI(false);
+  _lastTermPhase = '';
+  _lastTermDir   = '';
 
   const added    = _fmtNum(data.added    ?? 0);
   const deleted  = _fmtNum(data.deleted  ?? 0);
   const modified = _fmtNum(data.modified ?? 0);
+
+  _termWrite('─'.repeat(50), 'dim');
+  _termWrite(`扫描完成  新增 ${added}  删除 ${deleted}  修改 ${modified}`, 'success');
   App.showToast(`扫描完成！新增 ${added}，删除 ${deleted}，修改 ${modified}`, 'success', 5000);
 
-  // 刷新数据
   _loadDashboard();
 }
 
 function _onScanError() {
   _stopPolling();
   _setScanningUI(false);
+  _lastTermPhase = '';
+  _lastTermDir   = '';
+  _termWrite('扫描状态获取失败，请检查后端服务', 'error');
   App.showToast('扫描状态获取失败，请检查后端服务', 'error');
 }
 
@@ -414,20 +489,14 @@ function _stopPolling() {
   _isScanning = false;
 }
 
-function _setScanningUI(scanning, scanType = '') {
+function _setScanningUI(scanning) {
   _isScanning = scanning;
 
   const fullBtn = document.getElementById('btn-full-scan');
   const incrBtn = document.getElementById('btn-incremental-scan');
-  const panel   = document.getElementById('scan-progress-panel');
 
   if (fullBtn) fullBtn.disabled = scanning;
   if (incrBtn) incrBtn.disabled = scanning;
-
-  // 扫描中：显示进度面板，更新按钮图标
-  if (panel) {
-    panel.classList.toggle('hidden', !scanning);
-  }
 
   if (scanning && fullBtn) {
     const icon = fullBtn.querySelector('i[data-lucide]');
@@ -435,6 +504,73 @@ function _setScanningUI(scanning, scanType = '') {
   } else if (!scanning && fullBtn) {
     const icon = fullBtn.querySelector('i[data-lucide]');
     if (icon) { icon.dataset.lucide = 'database'; icon.classList.remove('animate-spin'); lucide.createIcons({ nodes: [fullBtn] }); }
+  }
+}
+
+// ──────────────────────────────────────────────
+// CLI 终端函数
+// ──────────────────────────────────────────────
+const _TERM_COUNT_MARKER = 'data-role="count"';
+
+function _termWrite(text, type = 'info') {
+  const colorMap = {
+    info:    'text-blue-600',
+    success: 'text-emerald-600 font-semibold',
+    warn:    'text-amber-600',
+    dim:     'text-stone-400',
+    path:    'text-stone-600',
+    error:   'text-red-500',
+  };
+  const cls = colorMap[type] || 'text-blue-600';
+
+  const now = new Date();
+  const ts  = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+
+  // HTML 转义防 XSS
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const line = `<p class="${cls}"><span class="text-stone-300 select-none">[${ts}]</span> ${escaped}</p>`;
+
+  _terminalLines.push(line);
+  if (_terminalLines.length > _MAX_TERM_LINES) _terminalLines.shift();
+
+  _termFlush();
+}
+
+function _termClear() {
+  _terminalLines = [];
+  _terminalUserScrolled = false;
+  const body = document.getElementById('terminal-log-body');
+  if (body) body.innerHTML = '<p class="text-stone-400 italic">等待扫描启动...</p>';
+}
+
+function _termUpdateCount(scanned, added, deleted, modified) {
+  const text = `已扫描 ${_fmtNum(scanned ?? 0)} 个文件  ` +
+    `<span class="text-emerald-600">+${added ?? 0}</span> ` +
+    `<span class="text-red-500">-${deleted ?? 0}</span> ` +
+    `<span class="text-amber-600">~${modified ?? 0}</span>`;
+
+  const countLine = `<p class="text-stone-600" ${_TERM_COUNT_MARKER}>${text}</p>`;
+
+  const lastIdx = _terminalLines.length - 1;
+  if (lastIdx >= 0 && _terminalLines[lastIdx].includes(_TERM_COUNT_MARKER)) {
+    _terminalLines[lastIdx] = countLine;
+  } else {
+    _terminalLines.push(countLine);
+    if (_terminalLines.length > _MAX_TERM_LINES) _terminalLines.shift();
+  }
+
+  _termFlush();
+}
+
+function _termFlush() {
+  const body = document.getElementById('terminal-log-body');
+  if (!body) return;
+  body.innerHTML = _terminalLines.join('');
+
+  if (!_terminalUserScrolled) {
+    const terminal = document.getElementById('scan-terminal');
+    if (terminal) terminal.scrollTop = terminal.scrollHeight;
   }
 }
 
@@ -469,11 +605,19 @@ function _fmtDate(iso) {
   } catch { return iso; }
 }
 
+function _shortenPath(path, maxLen = 45) {
+  if (!path || path === '--') return path;
+  if (path.length <= maxLen) return path;
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length <= 3) return path;
+  return parts[0] + '/.../' + parts.slice(-2).join('/');
+}
+
 // ──────────────────────────────────────────────
 // 公共 API
 // ──────────────────────────────────────────────
 window.Dashboard = {
-  /** 点击图例 / 图表跳转到搜索并筛选类型 */
+  /** 点击图表跳转到搜索并筛选类型 */
   filterByType(fileType) {
     if (!fileType) return;
     document.dispatchEvent(new CustomEvent('app:searchRequested', { detail: { q: '', type: fileType } }));

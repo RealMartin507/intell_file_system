@@ -30,6 +30,7 @@ class ScanState:
     root_path: str = ""
     scanned_count: int = 0         # 已处理的文件数
     current_dir: str = ""          # 当前正在扫描的目录
+    current_phase: str = ""        # 当前阶段描述（供前端显示）
     added: int = 0                 # 新增文件数
     deleted: int = 0               # 删除文件数（增量扫描）
     modified: int = 0              # 修改文件数（增量扫描）
@@ -182,6 +183,7 @@ def _run_full_scan(
         batch: list[dict] = []
         added = 0
         root_depth = root_path.replace('/', os.sep).rstrip(os.sep).count(os.sep) + 1
+        _state.current_phase = "遍历文件系统"
 
         for record in _walk(root_path, root_depth, exclude_dirs, exclude_patterns, disk_label):
             batch.append(record)
@@ -199,18 +201,95 @@ def _run_full_scan(
             added += len(batch)
             _state.added = added
 
-        # 全量写入完成：重建索引 + 批量快照 + FTS rebuild
+        # 全量写入完成：两波并行后处理（与 MFT 路径相同策略）
         t_post = time.monotonic()
-        _rebuild_full_scan_indexes(conn)
-        conn.execute(
-            "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
-            "SELECT file_path, modified_time, file_size, ? FROM files",
-            (scan_id,),
-        )
-        conn.commit()
-        conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
-        conn.commit()
-        logger.info("[SCAN] 后处理(索引+快照+FTS)完成: 耗时=%.2fs", time.monotonic() - t_post)
+
+        # 第一波：索引重建 + 快照写入 并行（各用独立连接，互不阻塞）
+        _state.current_phase = "重建数据库索引 & 生成文件快照"
+
+        def _sd_task_rebuild_indexes() -> float:
+            t = time.monotonic()
+            c = get_db()
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=OFF")
+            try:
+                _rebuild_full_scan_indexes(c)
+            finally:
+                c.close()
+            return time.monotonic() - t
+
+        def _sd_task_write_snapshots() -> float:
+            t = time.monotonic()
+            c = get_db()
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=OFF")
+            try:
+                # DROP→无索引INSERT→末尾建唯一索引（bulk-load，避免逐行维护 PRIMARY KEY B-tree）
+                c.executescript("""
+                    DROP TABLE IF EXISTS file_snapshots;
+                    CREATE TABLE file_snapshots (
+                        file_path     TEXT NOT NULL,
+                        modified_time TEXT,
+                        file_size     INTEGER,
+                        scan_id       INTEGER
+                    );
+                """)
+                c.execute(
+                    "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
+                    "SELECT file_path, modified_time, file_size, ? FROM files",
+                    (scan_id,),
+                )
+                c.commit()
+                c.execute(
+                    "CREATE UNIQUE INDEX idx_file_snapshots_path ON file_snapshots(file_path)"
+                )
+                c.commit()
+            finally:
+                c.close()
+            return time.monotonic() - t
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sd_post1") as pool:
+            f_idx  = pool.submit(_sd_task_rebuild_indexes)
+            f_snap = pool.submit(_sd_task_write_snapshots)
+            t_idx  = f_idx.result()
+            t_snap = f_snap.result()
+        logger.info("[SCAN] 索引重建完成: 耗时=%.2fs", t_idx)
+        logger.info("[SCAN] 快照批量写入完成: 耗时=%.2fs", t_snap)
+
+        # 第二波：FTS rebuild + 目录快照 并行（写不同表，WAL 下互不阻塞）
+        _state.current_phase = "重建全文搜索索引 & 更新目录快照"
+
+        def _sd_task_rebuild_fts() -> float:
+            t = time.monotonic()
+            c = get_db()
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=OFF")
+            try:
+                c.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+                c.commit()
+            finally:
+                c.close()
+            return time.monotonic() - t
+
+        def _sd_task_rebuild_dir_snapshots() -> float:
+            t = time.monotonic()
+            c = get_db()
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=OFF")
+            try:
+                _rebuild_dir_snapshots_fast(c, scan_id)
+            finally:
+                c.close()
+            return time.monotonic() - t
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sd_post2") as pool:
+            f_fts = pool.submit(_sd_task_rebuild_fts)
+            f_dir = pool.submit(_sd_task_rebuild_dir_snapshots)
+            t_fts = f_fts.result()
+            f_dir.result()
+        logger.info("[SCAN] FTS5索引重建完成: 耗时=%.2fs", t_fts)
+
+        logger.info("[SCAN] 后处理(索引+快照+FTS+目录快照)完成: 耗时=%.2fs", time.monotonic() - t_post)
 
         # 4. 更新扫描日志为完成
         conn.execute(
@@ -281,11 +360,18 @@ def _run_full_scan_mft(
 
     # 让前端在 MFT 读取阶段（约 4s）也能看到有效状态，而非 scanned=0
     _state.current_dir = "正在读取 MFT 元数据..."
+    _state.current_phase = "读取 MFT 元数据"
 
     _sep = os.sep
+    _first_batch = True
 
     def _callback(records: list[dict]) -> None:
-        nonlocal added, batch_no
+        nonlocal added, batch_no, _first_batch
+        # MFT 读取完成、目录路径展开完成后第一批数据才会到达
+        if _first_batch:
+            _first_batch = False
+            _state.current_phase = "写入文件记录"
+            _state.current_dir = ""
         filtered: list[dict] = []
 
         for r in records:
@@ -312,35 +398,133 @@ def _run_full_scan_mft(
             _state.added = added
             _state.scanned_count += len(filtered)
             _state.current_dir = filtered[-1]["parent_dir"]
+            _state.current_phase = "写入文件记录"
             logger.debug(
                 "[SCAN] DB批次 #%d 写入: %d条, 累计: %d条",
                 batch_no, len(filtered), added,
             )
 
-    mft_mod.scan_volume(drive_letter, _callback, _BATCH_SIZE, disk_label)
+    def _phase_cb(phase: str, current_dir: str) -> None:
+        _state.current_phase = phase
+        _state.current_dir = current_dir
 
-    # ── 后处理：重建索引 + 批量快照 + FTS rebuild ──────────────────────────────
+    _, _, dir_mtimes = mft_mod.scan_volume(drive_letter, _callback, _BATCH_SIZE, disk_label, phase_callback=_phase_cb)
+
+    # ── 后处理：两波并行执行 ───────────────────────────────────────────────────
+    # 第一波并行：索引重建 + 快照写入（互不依赖，各用独立连接）
+    # 第二波并行：FTS rebuild + 目录快照（需等第一波完成，因 FTS rebuild 需扫全表）
     t_post = time.monotonic()
+    _state.current_phase = "重建数据库索引 & 生成文件快照"
 
-    # 1) 重建 5 个索引（对已有数据做排序+B树构建，比逐行维护快很多）
-    _rebuild_full_scan_indexes(conn)
-    logger.info("[SCAN] 索引重建完成: 耗时=%.2fs", time.monotonic() - t_post)
+    def _task_rebuild_indexes() -> float:
+        t = time.monotonic()
+        c = get_db()
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=OFF")
+        try:
+            _rebuild_full_scan_indexes(c)
+        finally:
+            c.close()
+        return time.monotonic() - t
 
-    # 2) 一条 SQL 从 files 表批量生成 file_snapshots（替代逐批 executemany）
-    t_snap = time.monotonic()
-    conn.execute(
-        "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
-        "SELECT file_path, modified_time, file_size, ? FROM files",
-        (scan_id,),
-    )
-    conn.commit()
-    logger.info("[SCAN] 快照批量写入完成: 耗时=%.2fs", time.monotonic() - t_snap)
+    def _task_write_snapshots() -> float:
+        t = time.monotonic()
+        c = get_db()
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=OFF")
+        try:
+            # DROP→无索引INSERT→末尾建唯一索引（bulk-load）
+            c.executescript("""
+                DROP TABLE IF EXISTS file_snapshots;
+                CREATE TABLE file_snapshots (
+                    file_path     TEXT NOT NULL,
+                    modified_time TEXT,
+                    file_size     INTEGER,
+                    scan_id       INTEGER
+                );
+            """)
+            c.execute(
+                "INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id) "
+                "SELECT file_path, modified_time, file_size, ? FROM files",
+                (scan_id,),
+            )
+            c.commit()
+            c.execute(
+                "CREATE UNIQUE INDEX idx_file_snapshots_path ON file_snapshots(file_path)"
+            )
+            c.commit()
+        finally:
+            c.close()
+        return time.monotonic() - t
 
-    # 3) FTS5 rebuild
-    t_fts = time.monotonic()
-    conn.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
-    conn.commit()
-    logger.info("[SCAN] FTS5索引重建完成: 耗时=%.2fs", time.monotonic() - t_fts)
+    def _task_rebuild_fts() -> float:
+        t = time.monotonic()
+        c = get_db()
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=OFF")
+        try:
+            c.execute("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+            c.commit()
+        finally:
+            c.close()
+        return time.monotonic() - t
+
+    def _task_rebuild_dir_snapshots() -> float:
+        t = time.monotonic()
+        c = get_db()
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=OFF")
+        try:
+            # dir_mtimes 由 mft_scanner.scan_volume 返回，直接用（无需 os.stat）
+            c.executescript("""
+                DROP TABLE IF EXISTS dir_snapshots;
+                CREATE TABLE dir_snapshots (
+                    dir_path  TEXT NOT NULL,
+                    dir_mtime TEXT,
+                    scan_id   INTEGER
+                );
+            """)
+            batch: list[tuple] = []
+            for dir_path, mtime in dir_mtimes.items():
+                batch.append((dir_path, mtime, scan_id))
+                if len(batch) >= 5000:
+                    c.executemany(
+                        "INSERT INTO dir_snapshots (dir_path, dir_mtime, scan_id) VALUES (?, ?, ?)",
+                        batch,
+                    )
+                    batch.clear()
+            if batch:
+                c.executemany(
+                    "INSERT INTO dir_snapshots (dir_path, dir_mtime, scan_id) VALUES (?, ?, ?)",
+                    batch,
+                )
+            c.commit()
+            c.execute("CREATE UNIQUE INDEX idx_dir_snapshots_path ON dir_snapshots(dir_path)")
+            c.commit()
+        finally:
+            c.close()
+        elapsed_t = time.monotonic() - t
+        logger.info("[SCAN] 目录快照重建完成: %d 个目录, 耗时=%.2fs", len(dir_mtimes), elapsed_t)
+        return elapsed_t
+
+    # 第一波：索引重建 + 快照写入 并行（各用独立连接）
+    _state.current_phase = "重建数据库索引 & 生成文件快照"
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="post1") as pool:
+        f_idx  = pool.submit(_task_rebuild_indexes)
+        f_snap = pool.submit(_task_write_snapshots)
+        t_idx  = f_idx.result()
+        t_snap = f_snap.result()
+    logger.info("[SCAN] 索引重建完成: 耗时=%.2fs", t_idx)
+    logger.info("[SCAN] 快照批量写入完成: 耗时=%.2fs", t_snap)
+
+    # 第二波：FTS rebuild + 目录快照 并行（FTS读files写files_fts，目录快照写dir_snapshots，WAL下互不阻塞）
+    _state.current_phase = "重建全文搜索索引 & 更新目录快照"
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="post2") as pool:
+        f_fts = pool.submit(_task_rebuild_fts)
+        f_dir = pool.submit(_task_rebuild_dir_snapshots)
+        t_fts = f_fts.result()
+        f_dir.result()
+    logger.info("[SCAN] FTS5索引重建完成: 耗时=%.2fs", t_fts)
 
     logger.info("[SCAN] 后处理总耗时: %.2fs", time.monotonic() - t_post)
 
@@ -380,6 +564,9 @@ def _run_incremental_scan(
     exclude_patterns: list[str],
 ) -> None:
     global _state
+    t_scan_start = time.monotonic()
+    logger.info("[SCAN] === 开始增量扫描 root=%s ===", root_path)
+
     conn = get_db()
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -390,6 +577,7 @@ def _run_incremental_scan(
         if not conn.execute("SELECT 1 FROM file_snapshots LIMIT 1").fetchone():
             conn.close()
             conn = None
+            logger.info("[SCAN] 无历史快照，自动回退全量扫描")
             _run_full_scan(root_path, disk_label, exclude_dirs, exclude_patterns)
             return
 
@@ -402,7 +590,21 @@ def _run_incremental_scan(
         scan_id: int = cur.lastrowid
         _state.scan_id = scan_id
 
-        # 3. 创建临时表（TEMP TABLE 随连接结束自动销毁，写入磁盘临时库，不占 Python 堆内存）
+        # 3. 加载目录快照（用于 mtime 剪枝）
+        # 若无目录快照（旧数据库），退化为完整遍历（dir_snapshots_dict 为空）
+        t_load = time.monotonic()
+        dir_snapshots_dict: dict[str, str] = {}
+        rows = conn.execute("SELECT dir_path, dir_mtime FROM dir_snapshots").fetchall()
+        for row in rows:
+            dir_snapshots_dict[row[0]] = row[1]
+        has_dir_snapshots = len(dir_snapshots_dict) > 0
+        logger.info(
+            "[SCAN] 目录快照加载: %d 条, 耗时=%.3fs, 剪枝=%s",
+            len(dir_snapshots_dict), time.monotonic() - t_load,
+            "启用" if has_dir_snapshots else "禁用(无目录快照，将完整遍历)",
+        )
+
+        # 4. 创建临时表（TEMP TABLE 随连接结束自动销毁）
         conn.execute("DROP TABLE IF EXISTS temp_scan_snapshot")
         conn.execute("""
             CREATE TEMP TABLE temp_scan_snapshot (
@@ -421,11 +623,22 @@ def _run_incremental_scan(
             )
         """)
 
-        # 4. 遍历文件系统，批量写入临时表（内存中最多保留 _BATCH_SIZE 条）
+        # 5. 用 mtime 剪枝遍历，只遍历有变化的目录
+        #    changed_dirs: 本次实际遍历（扫描）的目录集合，用于更新目录快照
         batch: list[dict] = []
         root_depth = root_path.replace('/', os.sep).rstrip(os.sep).count(os.sep) + 1
+        changed_dirs: set[str] = set()   # 本次被实际扫描的目录（mtime 变化或新目录）
+        skipped_dirs: int = 0            # 被剪枝跳过的目录数
 
-        for record in _walk(root_path, root_depth, exclude_dirs, exclude_patterns, disk_label):
+        _state.current_phase = "遍历文件系统（目录剪枝）"
+        t_walk = time.monotonic()
+        for record in _walk_incremental(
+            root_path, root_depth, exclude_dirs, exclude_patterns,
+            disk_label, dir_snapshots_dict, changed_dirs,
+        ):
+            if record is _SKIP_SENTINEL:
+                skipped_dirs += 1
+                continue
             batch.append(record)
             _state.scanned_count += 1
             _state.current_dir = record["parent_dir"]
@@ -440,7 +653,36 @@ def _run_incremental_scan(
             conn.commit()
             batch.clear()
 
-        # 5. SQL 侧三路对比（全程不把快照拉入 Python 内存）
+        logger.info(
+            "[SCAN] 文件遍历完成: 扫描=%d条, 跳过目录=%d, 耗时=%.2fs",
+            _state.scanned_count, skipped_dirs, time.monotonic() - t_walk,
+        )
+
+        # 6. 未变化目录的文件直接从旧快照复制到临时表（SQL 操作，极快）
+        #    这样临时表包含完整文件列表，后续三路 SQL 对比逻辑不变
+        if has_dir_snapshots and skipped_dirs > 0:
+            _state.current_phase = "合并未变化目录文件"
+            t_copy = time.monotonic()
+            conn.execute("""
+                INSERT OR IGNORE INTO temp_scan_snapshot
+                    (path, mtime, size, file_name, file_name_no_ext, extension,
+                     created_time, parent_dir, dir_depth, file_type, shapefile_group, disk_label)
+                SELECT
+                    f.file_path, f.modified_time, f.file_size,
+                    f.file_name, f.file_name_no_ext, f.extension,
+                    f.created_time, f.parent_dir, f.dir_depth, f.file_type,
+                    f.shapefile_group, f.disk_label
+                FROM files f
+                WHERE f.parent_dir NOT IN (
+                    SELECT DISTINCT parent_dir FROM temp_scan_snapshot
+                )
+            """)
+            conn.commit()
+            logger.info("[SCAN] 未变化目录文件从 files 表复制完成: 耗时=%.2fs", time.monotonic() - t_copy)
+
+        # 7. SQL 侧三路对比（全程不把快照拉入 Python 内存）
+        _state.current_phase = "对比文件变化"
+        t_diff = time.monotonic()
         added = conn.execute("""
             SELECT COUNT(*) FROM temp_scan_snapshot
             WHERE path NOT IN (SELECT file_path FROM file_snapshots)
@@ -457,8 +699,14 @@ def _run_incremental_scan(
             WHERE t.mtime != s.modified_time OR t.size != s.file_size
         """).fetchone()[0]
 
-        # 6. 处理新增文件：INSERT files → 同步插入 FTS
+        logger.info(
+            "[SCAN] 三路对比完成: added=%d, deleted=%d, modified=%d, 耗时=%.2fs",
+            added, deleted, modified, time.monotonic() - t_diff,
+        )
+
+        # 8. 处理新增文件：INSERT files → 同步插入 FTS
         if added:
+            _state.current_phase = f"写入新增文件（{added} 条）"
             conn.execute("""
                 INSERT OR IGNORE INTO files
                     (file_name, file_name_no_ext, extension, file_size, created_time,
@@ -471,7 +719,6 @@ def _run_incremental_scan(
                 WHERE path NOT IN (SELECT file_path FROM file_snapshots)
             """)
             conn.commit()
-            # 新增文件写入 files 后，同步插入 FTS 索引
             conn.execute("""
                 INSERT INTO files_fts(rowid, file_name, file_path, file_type)
                 SELECT id, file_name, file_path, file_type FROM files
@@ -483,8 +730,9 @@ def _run_incremental_scan(
             conn.commit()
             _state.added = added
 
-        # 7. 处理删除文件：先删 FTS 条目（content FTS 需在 files 记录存在时读取文本），再删 files
+        # 9. 处理删除文件：先删 FTS，再删 files
         if deleted:
+            _state.current_phase = f"删除失效文件（{deleted} 条）"
             conn.execute("""
                 DELETE FROM files_fts WHERE rowid IN (
                     SELECT id FROM files
@@ -504,9 +752,9 @@ def _run_incremental_scan(
             conn.commit()
             _state.deleted = deleted
 
-        # 8. 处理修改文件：先删旧 FTS 条目 → INSERT OR REPLACE → 插入新 FTS 条目
-        # INSERT OR REPLACE 会分配新 rowid，因此需要在替换后重新插入 FTS
+        # 10. 处理修改文件：先删旧 FTS → INSERT OR REPLACE → 插入新 FTS
         if modified:
+            _state.current_phase = f"更新修改文件（{modified} 条）"
             conn.execute("""
                 DELETE FROM files_fts WHERE rowid IN (
                     SELECT f.id FROM files f
@@ -528,7 +776,6 @@ def _run_incremental_scan(
                 WHERE t.mtime != s.modified_time OR t.size != s.file_size
             """)
             conn.commit()
-            # 用新 rowid 插入 FTS（INSERT OR REPLACE 后文件已有新 id）
             conn.execute("""
                 INSERT INTO files_fts(rowid, file_name, file_path, file_type)
                 SELECT id, file_name, file_path, file_type FROM files
@@ -541,7 +788,8 @@ def _run_incremental_scan(
             conn.commit()
             _state.modified = modified
 
-        # 9. 替换 file_snapshots：DELETE ALL + INSERT FROM temp（全 SQL，单事务）
+        # 11. 替换 file_snapshots（全量，从临时表生成）
+        _state.current_phase = "更新文件快照"
         conn.execute("DELETE FROM file_snapshots")
         conn.execute("""
             INSERT INTO file_snapshots (file_path, modified_time, file_size, scan_id)
@@ -550,10 +798,15 @@ def _run_incremental_scan(
         """, (scan_id,))
         conn.commit()
 
-        # 10. 更新扫描日志（FTS 已在各变更操作中同步，无需 rebuild）
+        # 12. 更新目录快照（增量：只更新本次扫描到的目录，删除不再存在的目录）
+        _state.current_phase = "更新目录快照"
+        _update_dir_snapshots_incremental(conn, scan_id, changed_dirs)
+
+        # 13. 更新扫描日志
+        total_files = conn.execute("SELECT COUNT(*) FROM temp_scan_snapshot").fetchone()[0]
         conn.execute(
             "UPDATE scan_logs SET finished_at=?, total_files=?, added=?, deleted=?, modified=?, status=? WHERE id=?",
-            (datetime.now().isoformat(), _state.scanned_count, added, deleted, modified, "completed", scan_id),
+            (datetime.now().isoformat(), total_files, added, deleted, modified, "completed", scan_id),
         )
         conn.commit()
 
@@ -562,9 +815,16 @@ def _run_incremental_scan(
         _state.deleted = deleted
         _state.modified = modified
 
+        elapsed = time.monotonic() - t_scan_start
+        logger.info(
+            "[SCAN] === 增量扫描完成: 总文件=%d, added=%d, deleted=%d, modified=%d, 耗时=%.2fs ===",
+            total_files, added, deleted, modified, elapsed,
+        )
+
     except Exception as exc:
         _state.status = "failed"
         _state.error = str(exc)
+        logger.error("[SCAN] 增量扫描异常: %s", exc, exc_info=True)
         if _state.scan_id and conn is not None:
             try:
                 conn.execute(
@@ -581,6 +841,79 @@ def _run_incremental_scan(
 
 
 # ─── 目录遍历（生成器）──────────────────────────────────────────────────────────
+
+# 哨兵对象：_walk_incremental 跳过目录时 yield 此对象，以便外部统计 skipped_dirs
+_SKIP_SENTINEL = object()
+
+
+def _walk_incremental(
+    root_path: str,
+    root_depth: int,
+    exclude_dirs: list[str],
+    exclude_patterns: list[str],
+    disk_label: str,
+    dir_snapshots_dict: dict[str, str],
+    changed_dirs: set[str],
+) -> Iterator:
+    """
+    带目录 mtime 剪枝的增量遍历。
+    - 若目录 mtime 未变化：跳过该目录**自身的文件**，但仍递归检查子目录
+    - 若目录 mtime 变化或是新目录：正常 scandir 文件 + 递归子目录，加入 changed_dirs
+    - .gdb 目录仍作为单条 gis_vector 记录
+    """
+    exclude_dirs_set = set(exclude_dirs)
+
+    def _scan_dir(dir_path: str) -> Iterator:
+        # 检查目录 mtime 是否变化
+        try:
+            dir_stat = os.stat(dir_path)
+            current_mtime = datetime.fromtimestamp(dir_stat.st_mtime).isoformat()
+        except OSError:
+            return
+
+        old_mtime = dir_snapshots_dict.get(dir_path)
+        dir_unchanged = old_mtime is not None and current_mtime == old_mtime
+
+        if dir_unchanged:
+            # 目录自身未变化：跳过文件扫描（yield 哨兵计数），但必须继续递归子目录
+            yield _SKIP_SENTINEL
+        else:
+            # 目录有变化或是新目录，需要扫描该目录的文件
+            changed_dirs.add(dir_path)
+            _state.current_dir = dir_path
+
+        # 不论目录是否变化，都需要 scandir 以便递归检查子目录
+        try:
+            entries = list(os.scandir(dir_path))
+        except PermissionError:
+            return
+
+        for entry in entries:
+            name = entry.name
+
+            if name in exclude_dirs_set:
+                continue
+            if _matches_patterns(name, exclude_patterns):
+                continue
+
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+
+            if is_dir:
+                if name.lower().endswith(".gdb"):
+                    if not dir_unchanged:
+                        yield _gdb_record(entry, root_depth, disk_label)
+                else:
+                    yield from _scan_dir(entry.path)
+            elif not dir_unchanged:
+                # 只有目录有变化时才收集文件
+                if entry.is_file(follow_symlinks=False):
+                    yield _file_record(entry, root_depth, disk_label)
+
+    yield from _scan_dir(root_path)
+
 
 def _walk(
     root_path: str,
@@ -812,3 +1145,100 @@ def _rebuild_full_scan_indexes(conn) -> None:
     for name, definition in _FULL_SCAN_INDEXES:
         conn.execute(f"CREATE INDEX IF NOT EXISTS {name} {definition}")
     conn.commit()
+
+
+# ─── 目录快照辅助函数 ───────────────────────────────────────────────────────────
+
+def _rebuild_dir_snapshots(conn, scan_id: int) -> None:
+    """
+    全量扫描后重建目录快照（旧接口，内部委托给 fast 版本）。
+    """
+    _rebuild_dir_snapshots_fast(conn, scan_id)
+
+
+def _rebuild_dir_snapshots_fast(conn, scan_id: int) -> None:
+    """
+    全量扫描后重建目录快照（bulk-load 版本）：
+    DROP→无索引 INSERT（os.stat 获取 mtime）→末尾建唯一索引，
+    比逐行维护 PRIMARY KEY B-tree 快 10x+。
+    """
+    t = time.monotonic()
+    dirs = [row[0] for row in conn.execute(
+        "SELECT DISTINCT parent_dir FROM files WHERE parent_dir IS NOT NULL"
+    ).fetchall()]
+
+    # DROP+重建无索引表，末尾统一建索引（bulk-load）
+    conn.executescript("""
+        DROP TABLE IF EXISTS dir_snapshots;
+        CREATE TABLE dir_snapshots (
+            dir_path  TEXT NOT NULL,
+            dir_mtime TEXT,
+            scan_id   INTEGER
+        );
+    """)
+
+    batch: list[tuple] = []
+    for dir_path in dirs:
+        try:
+            mtime = datetime.fromtimestamp(os.stat(dir_path).st_mtime).isoformat()
+        except OSError:
+            continue
+        batch.append((dir_path, mtime, scan_id))
+        if len(batch) >= 5000:
+            conn.executemany(
+                "INSERT INTO dir_snapshots (dir_path, dir_mtime, scan_id) VALUES (?, ?, ?)",
+                batch,
+            )
+            batch.clear()
+
+    if batch:
+        conn.executemany(
+            "INSERT INTO dir_snapshots (dir_path, dir_mtime, scan_id) VALUES (?, ?, ?)",
+            batch,
+        )
+    conn.commit()
+    conn.execute("CREATE UNIQUE INDEX idx_dir_snapshots_path ON dir_snapshots(dir_path)")
+    conn.commit()
+    logger.info("[SCAN] 目录快照重建完成: %d 个目录, 耗时=%.2fs", len(dirs), time.monotonic() - t)
+
+
+def _update_dir_snapshots_incremental(conn, scan_id: int, changed_dirs: set[str]) -> None:
+    """
+    增量扫描后更新目录快照：
+    - 更新/新增本次实际扫描到的目录（changed_dirs）
+    - 删除文件系统中已不存在的目录（从 dir_snapshots 中移除）
+    """
+    if not changed_dirs:
+        return
+
+    t = time.monotonic()
+
+    # 更新/新增变化目录的 mtime
+    batch: list[tuple] = []
+    for dir_path in changed_dirs:
+        try:
+            mtime = datetime.fromtimestamp(os.stat(dir_path).st_mtime).isoformat()
+        except OSError:
+            # 目录已删除，后续清理步骤会处理
+            continue
+        batch.append((dir_path, mtime, scan_id))
+
+    if batch:
+        conn.executemany(
+            "INSERT OR REPLACE INTO dir_snapshots (dir_path, dir_mtime, scan_id) VALUES (?, ?, ?)",
+            batch,
+        )
+
+    # 删除文件系统中已不存在的目录记录
+    # 策略：dir_snapshots 中不在 files.parent_dir 里的条目即为已删除目录
+    conn.execute("""
+        DELETE FROM dir_snapshots
+        WHERE dir_path NOT IN (
+            SELECT DISTINCT parent_dir FROM files WHERE parent_dir IS NOT NULL
+        )
+    """)
+    conn.commit()
+    logger.info(
+        "[SCAN] 目录快照增量更新完成: 更新=%d个目录, 耗时=%.3fs",
+        len(batch), time.monotonic() - t,
+    )

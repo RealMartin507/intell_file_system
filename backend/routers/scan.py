@@ -84,6 +84,7 @@ async def get_scan_status():
         "deleted": state.deleted,
         "modified": state.modified,
         "current_dir": state.current_dir,
+        "current_phase": state.current_phase,
         "started_at": state.started_at,
         "error": state.error,
         "scan_method": state.scan_method,
